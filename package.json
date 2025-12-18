@@ -1,0 +1,60 @@
+{
+  "name": "changes-viewer",
+  "displayName": "Changes Viewer",
+  "description": "Local history provider for VS Code - automatically tracks file changes and provides timeline view",
+  "version": "0.1.0",
+  "engines": {
+    "vscode": "^1.60.0"
+  },
+  "categories": [
+    "Other"
+  ],
+  "activationEvents": [
+    "onStartupFinished"
+  ],
+  "main": "./out/extension.js",
+  "scripts": {
+    "vscode:prepublish": "npm run compile",
+    "compile": "tsc -p ./",
+    "watch": "tsc -watch -p ./",
+    "test": "mocha --require ts-node/register 'src/**/*.test.ts'",
+    "test:storage": "mocha --require ts-node/register 'src/services/__tests__/StorageService.test.ts'"
+  },
+  "contributes": {
+    "commands": [
+      {
+        "command": "changes-viewer.restore",
+        "title": "Restore File from Snapshot",
+        "category": "Changes Viewer"
+      },
+      {
+        "command": "changes-viewer.accept",
+        "title": "Accept Change",
+        "category": "Changes Viewer"
+      },
+      {
+        "command": "changes-viewer.diff",
+        "title": "Compare with Current Version",
+        "category": "Changes Viewer"
+      },
+      {
+        "command": "changes-viewer.showDetails",
+        "title": "Show Snapshot Details",
+        "category": "Changes Viewer"
+      },
+      {
+        "command": "changes-viewer.clearSnapshots",
+        "title": "Clear Old Snapshots",
+        "category": "Changes Viewer"
+      }
+    ]
+  },
+  "devDependencies": {
+    "@types/mocha": "^10.0.0",
+    "@types/node": "^20.0.0",
+    "@types/vscode": "^1.60.0",
+    "mocha": "^10.0.0",
+    "ts-node": "^10.9.0",
+    "typescript": "^5.0.0"
+  }
+}
