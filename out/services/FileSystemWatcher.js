@@ -48,6 +48,9 @@ class FileSystemWatcher {
         this.disposables = [];
         this.debounceTimers = new Map();
         this.isWatching = false;
+        // Очередь для ограничения количества одновременных операций создания снапшотов
+        this.snapshotQueue = new Map();
+        this.maxConcurrentSnapshots = 5;
         // Паттерны временных файлов
         this.temporaryFilePatterns = [
             /\.tmp$/i,
@@ -115,6 +118,8 @@ class FileSystemWatcher {
             clearTimeout(timer);
         }
         this.debounceTimers.clear();
+        // Очищаем очередь операций создания снапшотов
+        this.snapshotQueue.clear();
         // Отменяем все подписки
         for (const disposable of this.disposables) {
             disposable.dispose();
@@ -281,14 +286,52 @@ class FileSystemWatcher {
         return false;
     }
     /**
-     * Создает снапшот для указанного файла.
-     * Читает файл с диска с повторными попытками, проверяет размер и создает снапшот.
+     * Создает снапшот для указанного файла с ограничением на количество одновременных операций.
+     * Использует очередь для предотвращения перегрузки системы при множественных быстрых изменениях.
      *
      * @param uri URI файла
      * @param source Источник создания снапшота
      * @param metadata Дополнительные метаданные для снапшота
      */
     async createSnapshotForFile(uri, source, metadata) {
+        const fileUri = uri.toString();
+        // Проверяем, есть ли уже операция для этого файла в очереди
+        const existingOperation = this.snapshotQueue.get(fileUri);
+        if (existingOperation) {
+            // Если операция уже выполняется, ждем её завершения
+            try {
+                await existingOperation;
+            }
+            catch (error) {
+                // Игнорируем ошибки предыдущей операции
+            }
+        }
+        // Проверяем количество активных операций
+        if (this.snapshotQueue.size >= this.maxConcurrentSnapshots) {
+            // Если достигнут лимит, ждем завершения одной из операций
+            const operations = Array.from(this.snapshotQueue.values());
+            await Promise.race(operations);
+        }
+        // Создаем новую операцию и добавляем в очередь
+        const operation = this.createSnapshotForFileInternal(uri, source, metadata);
+        this.snapshotQueue.set(fileUri, operation);
+        try {
+            await operation;
+        }
+        finally {
+            // Удаляем операцию из очереди после завершения
+            this.snapshotQueue.delete(fileUri);
+        }
+    }
+    /**
+     * Внутренний метод для создания снапшота.
+     * Читает файл с диска с повторными попытками, проверяет размер и создает снапшот.
+     *
+     * @param uri URI файла
+     * @param source Источник создания снапшота
+     * @param metadata Дополнительные метаданные для снапшота
+     */
+    async createSnapshotForFileInternal(uri, source, metadata) {
         try {
             // Читаем файл с диска с повторными попытками (максимум 3 попытки)
             const fileData = await (0, retry_1.retryWithBackoff)(async () => {

@@ -52,8 +52,9 @@ describe('DocumentWatcher', () => {
     let createdSnapshots = [];
     beforeEach(() => {
         // Мокируем isInWorkspace, чтобы всегда возвращать true для тестовых файлов
+        // Используем spyOn если это было бы возможно с jest, но здесь мы просто подменяем метод
         uriUtils.isInWorkspace = (uri) => {
-            return uri.fsPath.startsWith('/workspace');
+            return true;
         };
         // Создаем моки для зависимостей
         historyManager = {
@@ -234,6 +235,16 @@ describe('DocumentWatcher', () => {
         it('should create snapshot when file is saved', async function () {
             this.timeout(5000);
             documentWatcher.startWatching();
+            // Мокируем vscode.workspace.fs.stat
+            const originalStat = vscode.workspace.fs.stat;
+            vscode.workspace.fs.stat = async (uri) => {
+                return {
+                    type: 1,
+                    ctime: Date.now(),
+                    mtime: Date.now(),
+                    size: 100
+                };
+            };
             // Мокируем vscode.workspace.fs.readFile
             const originalReadFile = vscode.workspace.fs.readFile;
             vscode.workspace.fs.readFile = async (uri) => {
@@ -253,8 +264,9 @@ describe('DocumentWatcher', () => {
             assert.strictEqual(createdSnapshots.length, 1);
             assert.strictEqual(createdSnapshots[0].source, 'save');
             assert.strictEqual(createdSnapshots[0].fileUri, 'file:///workspace/test.ts');
-            // Восстанавливаем оригинальную функцию
+            // Восстанавливаем оригинальные функции
             vscode.workspace.fs.readFile = originalReadFile;
+            vscode.workspace.fs.stat = originalStat;
         });
         it('should ignore non-file schemes when saving', async function () {
             this.timeout(5000);

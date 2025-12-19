@@ -222,8 +222,8 @@ describe('showDetailsCommand', () => {
             assert.ok(showErrorMessageCalls[0].includes('required'));
         });
         it('should handle non-existent snapshot', async () => {
-            // Вызываем команду showDetails с несуществующим ID
-            await (0, showDetailsCommand_1.showDetailsCommand)(historyManager, 'non-existent-id');
+            // Вызываем команду showDetails с несуществующим ID (валидный UUID v4)
+            await (0, showDetailsCommand_1.showDetailsCommand)(historyManager, '123e4567-e89b-42d3-a456-426614174000');
             // Проверяем, что показана ошибка
             assert.strictEqual(showErrorMessageCalls.length, 1);
             assert.ok(showErrorMessageCalls[0].includes('not found'));

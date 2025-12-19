@@ -136,12 +136,14 @@ describe('LocalHistoryTimelineProvider', () => {
                             filtered = filtered.slice(cursorIndex + 1);
                         }
                     }
-                    if (filters.limit !== undefined && filters.limit > 0) {
-                        filtered = filtered.slice(0, filters.limit);
-                    }
                 }
                 // Сортируем по timestamp (новые первыми)
-                return filtered.sort((a, b) => b.timestamp - a.timestamp);
+                filtered = filtered.sort((a, b) => b.timestamp - a.timestamp);
+                // Применяем limit после сортировки (как в реальном коде)
+                if (filters && filters.limit !== undefined && filters.limit > 0) {
+                    filtered = filtered.slice(0, filters.limit);
+                }
+                return filtered;
             }
         };
         provider = new LocalHistoryTimelineProvider_1.LocalHistoryTimelineProvider(mockHistoryManager);
@@ -172,8 +174,8 @@ describe('LocalHistoryTimelineProvider', () => {
         it('should respect limit option', async () => {
             const cancellationToken = new vscode.CancellationTokenSource().token;
             const result = await provider.provideTimeline(fileUri, { limit: 2 }, cancellationToken);
-            assert.ok(Array.isArray(result));
-            assert.strictEqual(result.length, 2);
+            const items = Array.isArray(result) ? result : result.items;
+            assert.strictEqual(items.length, 2);
         });
         it('should handle pagination with cursor', async () => {
             const cancellationToken = new vscode.CancellationTokenSource().token;

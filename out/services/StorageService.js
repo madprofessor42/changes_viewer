@@ -167,6 +167,29 @@ class StorageService {
         return snapshots;
     }
     /**
+     * Получает список всех файлов, у которых есть снапшоты.
+     * @returns Массив URI файлов (строки), отсортированных по времени последнего изменения (новые первыми)
+     */
+    async getAllTrackedFiles() {
+        const index = await this.getIndex();
+        const fileUris = Object.keys(index.index);
+        // Сортируем файлы по времени последнего снапшота (новые первыми)
+        return fileUris.sort((uri1, uri2) => {
+            const snapshots1 = index.index[uri1] || [];
+            const snapshots2 = index.index[uri2] || [];
+            // Получаем последний снапшот для каждого файла
+            const lastSnapshot1 = snapshots1.length > 0
+                ? index.snapshots.find(s => s.id === snapshots1[0])
+                : undefined;
+            const lastSnapshot2 = snapshots2.length > 0
+                ? index.snapshots.find(s => s.id === snapshots2[0])
+                : undefined;
+            const timestamp1 = lastSnapshot1?.timestamp || 0;
+            const timestamp2 = lastSnapshot2?.timestamp || 0;
+            return timestamp2 - timestamp1; // Новые первыми
+        });
+    }
+    /**
      * Сохраняет содержимое снапшота в файловую систему.
      * Применяет сжатие для больших файлов, если включено в настройках.
      * @param snapshotId ID снапшота

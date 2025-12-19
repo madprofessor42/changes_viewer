@@ -239,8 +239,8 @@ describe('diffCommand', () => {
             assert.ok(showErrorMessageCalls[0].includes('required'));
         });
         it('should handle non-existent snapshot', async () => {
-            // Вызываем команду diff с несуществующим ID
-            await (0, diffCommand_1.diffCommand)(historyManager, storageService, 'non-existent-id');
+            // Вызываем команду diff с несуществующим ID (валидный UUID v4)
+            await (0, diffCommand_1.diffCommand)(historyManager, storageService, '123e4567-e89b-42d3-a456-426614174000');
             // Проверяем, что показана ошибка
             assert.strictEqual(showErrorMessageCalls.length, 1);
             assert.ok(showErrorMessageCalls[0].includes('not found'));

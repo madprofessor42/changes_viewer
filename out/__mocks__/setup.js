@@ -108,6 +108,15 @@ const mockVscode = {
                 // По умолчанию возвращаем пустой буфер
                 // Тесты могут переопределить это поведение
                 return Buffer.from('', 'utf8');
+            },
+            stat: async (uri) => {
+                // По умолчанию возвращаем фиктивную статистику
+                return {
+                    type: 1, // File
+                    ctime: Date.now(),
+                    mtime: Date.now(),
+                    size: 0
+                };
             }
         },
         workspaceFolders: [
@@ -133,6 +142,18 @@ const mockVscode = {
         showWarningMessage: async (message) => {
             // Мок для showWarningMessage - можно переопределить в тестах
             return undefined;
+        },
+        createOutputChannel: (name) => {
+            // Мок для createOutputChannel
+            return {
+                name: name,
+                append: (value) => { },
+                appendLine: (value) => { },
+                clear: () => { },
+                show: (preserveFocus) => { },
+                hide: () => { },
+                dispose: () => { }
+            };
         }
     },
     env: {
@@ -157,6 +178,24 @@ const mockVscode = {
             const error = new FileSystemError(`Permission denied: ${uri}`);
             error.code = 'PermissionDenied';
             return error;
+        }
+    },
+    CancellationTokenSource: class CancellationTokenSource {
+        constructor() {
+            this._isCancelled = false;
+        }
+        get token() {
+            const self = this;
+            return {
+                get isCancellationRequested() { return self._isCancelled; },
+                onCancellationRequested: () => ({ dispose: () => { } })
+            };
+        }
+        cancel() {
+            this._isCancelled = true;
+        }
+        dispose() {
+            this._isCancelled = false;
         }
     }
 };

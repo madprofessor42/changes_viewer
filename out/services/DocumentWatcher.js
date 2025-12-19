@@ -35,7 +35,7 @@ var __importStar = (this && this.__importStar) || (function () {
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.DocumentWatcher = void 0;
 const vscode = __importStar(require("vscode"));
-const uri_1 = require("../utils/uri");
+const uriUtils = __importStar(require("../utils/uri"));
 const logger_1 = require("../utils/logger");
 /**
  * Компонент для отслеживания изменений файлов в редакторе VS Code.
@@ -101,7 +101,7 @@ class DocumentWatcher {
             return;
         }
         // 2. Игнорируем изменения в файлах вне рабочей области (для file:// URI)
-        if (document.uri.scheme === 'file' && !(0, uri_1.isInWorkspace)(document.uri)) {
+        if (document.uri.scheme === 'file' && !uriUtils.isInWorkspace(document.uri)) {
             return;
         }
         // 3. Игнорируем закрытые документы
@@ -142,7 +142,7 @@ class DocumentWatcher {
             return;
         }
         // 2. Игнорируем файлы вне рабочей области
-        if (!(0, uri_1.isInWorkspace)(document.uri)) {
+        if (!uriUtils.isInWorkspace(document.uri)) {
             return;
         }
         // 3. Игнорируем закрытые документы

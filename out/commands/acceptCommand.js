@@ -144,7 +144,7 @@ async function acceptCommand(historyManager, timelineProvider, snapshotId) {
             }
             else {
                 // Полный провал - показываем общее сообщение об ошибке
-                vscode.window.showErrorMessage(`Failed to accept changes: ${errorSummary}`);
+                vscode.window.showErrorMessage(`Failed to process snapshots: ${errorSummary}`);
             }
         }
         else {

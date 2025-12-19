@@ -1,7 +1,7 @@
 {
   "name": "changes-viewer",
   "displayName": "Changes Viewer",
-  "description": "Local history provider for VS Code - automatically tracks file changes and provides timeline view",
+  "description": "Local history provider for VS Code - automatically tracks file changes",
   "version": "0.1.0",
   "engines": {
     "vscode": "^1.60.0"
@@ -25,22 +25,26 @@
       {
         "command": "changes-viewer.restore",
         "title": "Restore File from Snapshot",
-        "category": "Changes Viewer"
+        "category": "Changes Viewer",
+        "icon": "$(reply)"
       },
       {
         "command": "changes-viewer.accept",
         "title": "Accept Change",
-        "category": "Changes Viewer"
+        "category": "Changes Viewer",
+        "icon": "$(check)"
       },
       {
         "command": "changes-viewer.diff",
         "title": "Compare with Current Version",
-        "category": "Changes Viewer"
+        "category": "Changes Viewer",
+        "icon": "$(diff)"
       },
       {
         "command": "changes-viewer.showDetails",
         "title": "Show Snapshot Details",
-        "category": "Changes Viewer"
+        "category": "Changes Viewer",
+        "icon": "$(info)"
       },
       {
         "command": "changes-viewer.clearSnapshots",
@@ -48,27 +52,44 @@
         "category": "Changes Viewer"
       }
     ],
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "changes-viewer-container",
+          "title": "Changes Viewer",
+          "icon": "resources/icon.svg"
+        }
+      ]
+    },
+    "views": {
+      "changes-viewer-container": [
+        {
+          "id": "changes-viewer-view",
+          "name": "Tracked Files"
+        }
+      ]
+    },
     "menus": {
-      "timeline/item/context": [
+      "view/item/context": [
         {
           "command": "changes-viewer.restore",
-          "when": "timelineItem == timeline.changes-viewer",
-          "group": "changes-viewer@1"
-        },
-        {
-          "command": "changes-viewer.accept",
-          "when": "timelineItem == timeline.changes-viewer",
-          "group": "changes-viewer@2"
+          "when": "view == changes-viewer-view && viewItem == changes-viewer.snapshotItem",
+          "group": "inline"
         },
         {
           "command": "changes-viewer.diff",
-          "when": "timelineItem == timeline.changes-viewer",
-          "group": "changes-viewer@3"
+          "when": "view == changes-viewer-view && viewItem == changes-viewer.snapshotItem",
+          "group": "inline"
         },
         {
           "command": "changes-viewer.showDetails",
-          "when": "timelineItem == timeline.changes-viewer",
-          "group": "changes-viewer@4"
+          "when": "view == changes-viewer-view && viewItem == changes-viewer.snapshotItem",
+          "group": "1_actions"
+        },
+        {
+          "command": "changes-viewer.accept",
+          "when": "view == changes-viewer-view && viewItem == changes-viewer.snapshotItem",
+          "group": "1_actions"
         }
       ]
     },

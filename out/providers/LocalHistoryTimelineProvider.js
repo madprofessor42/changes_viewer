@@ -74,6 +74,9 @@ class LocalHistoryTimelineProvider {
     constructor(historyManager) {
         this.onDidChangeEmitter = new vscode.EventEmitter();
         this.onDidChange = this.onDidChangeEmitter.event;
+        // Кеш отсортированных снапшотов для часто запрашиваемых файлов
+        this.sortedSnapshotsCache = new Map();
+        this.cacheTTL = 5000; // 5 секунд
         this.historyManager = historyManager;
         this.logger = logger_1.Logger.getInstance();
     }
@@ -128,12 +131,36 @@ class LocalHistoryTimelineProvider {
             // UC-04 А3: Обработка ошибок чтения из Local Storage
             let snapshots;
             try {
-                snapshots = await this.historyManager.getSnapshotsForFile(uri, {
-                    accepted: false,
-                    limit: limit,
-                    to: fromTimestamp, // Получаем снапшоты до указанного timestamp
-                    cursorId: cursorId // Для точной позиции (опционально)
-                });
+                // Проверяем кеш для оптимизации
+                const cacheKey = uri.toString();
+                const cached = this.sortedSnapshotsCache.get(cacheKey);
+                const now = Date.now();
+                if (cached && (now - cached.timestamp) < this.cacheTTL && !fromTimestamp && !cursorId) {
+                    // Используем кешированные снапшоты, если они актуальны и нет фильтров по времени
+                    snapshots = cached.snapshots;
+                }
+                else {
+                    // Получаем снапшоты из хранилища
+                    snapshots = await this.historyManager.getSnapshotsForFile(uri, {
+                        accepted: false,
+                        // Не применяем limit здесь, чтобы можно было использовать кеш
+                        to: fromTimestamp, // Получаем снапшоты до указанного timestamp
+                        cursorId: cursorId // Для точной позиции (опционально)
+                    });
+                    // Кешируем отсортированные снапшоты (только если нет фильтров по времени)
+                    if (!fromTimestamp && !cursorId) {
+                        const sorted = snapshots.sort((a, b) => b.timestamp - a.timestamp);
+                        this.sortedSnapshotsCache.set(cacheKey, {
+                            snapshots: sorted,
+                            timestamp: now
+                        });
+                        snapshots = sorted;
+                    }
+                    else {
+                        // Сортируем снапшоты по timestamp (новые сверху)
+                        snapshots = snapshots.sort((a, b) => b.timestamp - a.timestamp);
+                    }
+                }
             }
             catch (error) {
                 // Ошибка чтения из Local Storage - показываем уведомление и логируем
@@ -151,8 +178,11 @@ class LocalHistoryTimelineProvider {
             if (token.isCancellationRequested) {
                 return [];
             }
-            // Явно сортируем снапшоты по timestamp (новые сверху)
-            const sortedSnapshots = snapshots.sort((a, b) => b.timestamp - a.timestamp);
+            // Применяем limit после получения и сортировки снапшотов
+            let sortedSnapshots = snapshots;
+            if (limit !== undefined && limit > 0) {
+                sortedSnapshots = snapshots.slice(0, limit);
+            }
             // Преобразуем снапшоты в TimelineItem
             const timelineItems = [];
             for (const snapshot of sortedSnapshots) {
@@ -164,18 +194,22 @@ class LocalHistoryTimelineProvider {
                 timelineItems.push(timelineItem);
             }
             // Определяем, есть ли следующая страница
-            // Если получено ровно limit элементов, возможно есть еще
-            const hasMore = limit !== undefined && timelineItems.length === limit;
-            // Если есть следующая страница, возвращаем объект Timeline с paging.cursor
-            if (hasMore && timelineItems.length > 0) {
+            // Если получено ровно limit элементов, возможно есть еще снапшоты в исходном списке
+            if (limit !== undefined && limit > 0 && timelineItems.length === limit) {
+                // Проверяем, есть ли еще снапшоты после примененного limit
+                // Для этого проверяем, есть ли снапшоты в исходном списке после последнего элемента
                 const lastItem = timelineItems[timelineItems.length - 1];
-                const nextCursor = createCursor(lastItem.timestamp, lastItem.id);
-                return {
-                    items: timelineItems,
-                    paging: {
-                        cursor: nextCursor
-                    }
-                };
+                const lastItemIndex = snapshots.findIndex(s => s.id === lastItem.id);
+                const hasMoreAfterLimit = lastItemIndex >= 0 && lastItemIndex < snapshots.length - 1;
+                if (hasMoreAfterLimit) {
+                    const nextCursor = createCursor(lastItem.timestamp, lastItem.id);
+                    return {
+                        items: timelineItems,
+                        paging: {
+                            cursor: nextCursor
+                        }
+                    };
+                }
             }
             return timelineItems;
         }
@@ -305,15 +339,20 @@ class LocalHistoryTimelineProvider {
     /**
      * Уведомляет VS Code об изменении Timeline для указанного файла.
      * Вызывается при создании новых снапшотов или изменении существующих.
+     * Очищает кеш для указанного файла.
      *
      * @param uri URI файла, для которого нужно обновить Timeline (опционально, если не указан - обновляется для всех файлов)
      */
     notifyTimelineChange(uri) {
+        // Очищаем кеш для обновленного файла
         if (uri) {
+            this.sortedSnapshotsCache.delete(uri.toString());
             // Уведомляем об изменении для конкретного файла
             this.onDidChangeEmitter.fire({ uri });
         }
         else {
+            // Очищаем весь кеш при глобальном обновлении
+            this.sortedSnapshotsCache.clear();
             // Уведомляем об изменении для всех файлов
             this.onDidChangeEmitter.fire({});
         }
@@ -323,6 +362,7 @@ class LocalHistoryTimelineProvider {
      */
     dispose() {
         this.onDidChangeEmitter.dispose();
+        this.sortedSnapshotsCache.clear();
     }
 }
 exports.LocalHistoryTimelineProvider = LocalHistoryTimelineProvider;

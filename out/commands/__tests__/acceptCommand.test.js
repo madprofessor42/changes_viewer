@@ -213,8 +213,8 @@ describe('acceptCommand', () => {
             assert.ok(showInformationMessageCalls[0].includes('processed'));
         });
         it('should handle non-existent snapshot', async () => {
-            // Вызываем команду accept с несуществующим ID
-            await (0, acceptCommand_1.acceptCommand)(historyManager, timelineProvider, 'non-existent-id');
+            // Вызываем команду accept с несуществующим ID (валидный UUID v4)
+            await (0, acceptCommand_1.acceptCommand)(historyManager, timelineProvider, '123e4567-e89b-42d3-a456-426614174000');
             // Проверяем, что показана ошибка
             assert.strictEqual(showErrorMessageCalls.length, 1);
             assert.ok(showErrorMessageCalls[0].includes('Failed to process snapshots'));

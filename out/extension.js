@@ -41,7 +41,8 @@ const StorageService_1 = require("./services/StorageService");
 const CleanupService_1 = require("./services/CleanupService");
 const LocalHistoryManager_1 = require("./services/LocalHistoryManager");
 const ChangeTracker_1 = require("./services/ChangeTracker");
-const LocalHistoryTimelineProvider_1 = require("./providers/LocalHistoryTimelineProvider");
+// import { LocalHistoryTimelineProvider } from './providers/LocalHistoryTimelineProvider'; // Убрали Timeline
+const LocalHistoryTreeProvider_1 = require("./providers/LocalHistoryTreeProvider");
 const restoreCommand_1 = require("./commands/restoreCommand");
 const acceptCommand_1 = require("./commands/acceptCommand");
 const diffCommand_1 = require("./commands/diffCommand");
@@ -91,7 +92,6 @@ function activate(context) {
     cleanupService.startPeriodicCleanup(24);
     logger.info('Periodic cleanup started');
     // Сохраняем ChangeTracker в subscriptions для автоматической очистки при деактивации
-    // Создаем Disposable для ChangeTracker, который остановит отслеживание
     const changeTrackerDisposable = {
         dispose: () => {
             changeTracker.stopTracking();
@@ -99,59 +99,57 @@ function activate(context) {
         }
     };
     context.subscriptions.push(changeTrackerDisposable);
-    // Регистрация Timeline Provider
-    // NOTE: Timeline API доступен с VS Code 1.64+, но для совместимости с 1.60.0
-    // используем условную регистрацию. Если API недоступен, провайдер не будет зарегистрирован.
-    let timelineProvider;
-    let timelineProviderDisposable;
-    // Проверяем наличие Timeline API (доступен с VS Code 1.64+)
-    // Используем type assertion для обхода проверки типов, так как API может быть недоступен в старых версиях
-    const workspaceWithTimeline = vscode.workspace;
-    if (workspaceWithTimeline.registerTimelineProvider) {
-        timelineProvider = new LocalHistoryTimelineProvider_1.LocalHistoryTimelineProvider(historyManager);
-        // Регистрируем провайдер для всех схем файлов ('file') с source 'changes-viewer'
-        // source используется для идентификации Timeline items в меню
-        timelineProviderDisposable = workspaceWithTimeline.registerTimelineProvider('file', timelineProvider, 'changes-viewer');
-        if (timelineProviderDisposable) {
-            context.subscriptions.push(timelineProviderDisposable);
-        }
-        // Устанавливаем callback для уведомления Timeline Provider о создании снапшотов
-        historyManager.setOnSnapshotCreatedCallback((snapshot) => {
-            if (timelineProvider) {
-                // Уведомляем Timeline Provider об изменении для файла снапшота
-                const fileUri = vscode.Uri.parse(snapshot.fileUri);
-                timelineProvider.notifyTimelineChange(fileUri);
-            }
-        });
-        logger.info('Timeline Provider: registered successfully');
-    }
-    else {
-        logger.warn('Timeline API is not available in this version of VS Code (requires 1.64+)');
-    }
-    // Регистрация команд
+    // --- UI: Регистрация Tree View Provider (вместо Timeline) ---
+    const treeProvider = new LocalHistoryTreeProvider_1.LocalHistoryTreeProvider(historyManager);
+    // Регистрируем провайдер для View ID из package.json
+    const treeViewDisposable = vscode.window.registerTreeDataProvider('changes-viewer-view', treeProvider);
+    context.subscriptions.push(treeViewDisposable);
+    // Устанавливаем callback для уведомления Tree Provider о создании снапшотов
+    historyManager.setOnSnapshotCreatedCallback((snapshot) => {
+        // Просто обновляем дерево, если снапшот относится к текущему файлу
+        treeProvider.refresh();
+    });
+    logger.info('Tree View Provider: registered successfully');
+    // --- Команды ---
+    // Вспомогательная функция для извлечения ID из аргументов команды
+    // Команды из TreeView получают первым аргументом элемент дерева (HistoryTreeItem)
+    const getSnapshotId = (arg) => {
+        if (typeof arg === 'string')
+            return arg;
+        if (arg instanceof LocalHistoryTreeProvider_1.HistoryTreeItem && arg.snapshotId)
+            return arg.snapshotId;
+        return undefined;
+    };
     // Команда restore
-    const restoreCommandDisposable = vscode.commands.registerCommand('changes-viewer.restore', async (snapshotId) => {
+    const restoreCommandDisposable = vscode.commands.registerCommand('changes-viewer.restore', async (arg) => {
+        const snapshotId = getSnapshotId(arg);
         await (0, restoreCommand_1.restoreCommand)(historyManager, storageService, snapshotId);
     });
     context.subscriptions.push(restoreCommandDisposable);
     // Команда accept
-    const acceptCommandDisposable = vscode.commands.registerCommand('changes-viewer.accept', async (snapshotId) => {
-        await (0, acceptCommand_1.acceptCommand)(historyManager, timelineProvider, snapshotId);
+    const acceptCommandDisposable = vscode.commands.registerCommand('changes-viewer.accept', async (arg) => {
+        const snapshotId = getSnapshotId(arg);
+        // timelineProvider больше нет, передаем undefined
+        await (0, acceptCommand_1.acceptCommand)(historyManager, undefined, snapshotId);
+        treeProvider.refresh(); // Обновляем дерево после изменения статуса
     });
     context.subscriptions.push(acceptCommandDisposable);
     // Команда diff
-    const diffCommandDisposable = vscode.commands.registerCommand('changes-viewer.diff', async (snapshotId) => {
+    const diffCommandDisposable = vscode.commands.registerCommand('changes-viewer.diff', async (arg) => {
+        const snapshotId = getSnapshotId(arg);
         await (0, diffCommand_1.diffCommand)(historyManager, storageService, snapshotId);
     });
     context.subscriptions.push(diffCommandDisposable);
     // Команда showDetails
-    const showDetailsCommandDisposable = vscode.commands.registerCommand('changes-viewer.showDetails', async (snapshotId) => {
+    const showDetailsCommandDisposable = vscode.commands.registerCommand('changes-viewer.showDetails', async (arg) => {
+        const snapshotId = getSnapshotId(arg);
         await (0, showDetailsCommand_1.showDetailsCommand)(historyManager, snapshotId);
     });
     context.subscriptions.push(showDetailsCommandDisposable);
     // Команда clearSnapshots
     const clearSnapshotsCommandDisposable = vscode.commands.registerCommand('changes-viewer.clearSnapshots', async () => {
         await (0, clearSnapshotsCommand_1.clearSnapshotsCommand)(cleanupService, configService);
+        treeProvider.refresh(); // Обновляем дерево после очистки
     });
     context.subscriptions.push(clearSnapshotsCommandDisposable);
     logger.info('All commands registered');
@@ -164,18 +162,10 @@ function activate(context) {
 }
 /**
  * Деактивирует расширение Changes Viewer.
- * Очищает ресурсы и останавливает сервисы.
- *
- * Примечание: Большинство ресурсов очищаются автоматически через context.subscriptions,
- * но эта функция может быть использована для дополнительной очистки, если необходимо.
  */
 function deactivate() {
     const logger = logger_1.Logger.getInstance();
     logger.info('Changes Viewer extension is deactivating...');
-    // Все Disposable ресурсы автоматически очищаются через context.subscriptions
-    // при деактивации расширения. Дополнительная очистка здесь не требуется,
-    // так как ChangeTracker и CleanupService уже добавлены в subscriptions
-    // и будут автоматически остановлены при вызове dispose().
     logger.info('Changes Viewer extension deactivated');
 }
 //# sourceMappingURL=extension.js.map
