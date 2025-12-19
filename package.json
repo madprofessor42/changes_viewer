@@ -47,12 +47,100 @@
         "title": "Clear Old Snapshots",
         "category": "Changes Viewer"
       }
-    ]
+    ],
+    "menus": {
+      "timeline/item/context": [
+        {
+          "command": "changes-viewer.restore",
+          "when": "timelineItem == timeline.changes-viewer",
+          "group": "changes-viewer@1"
+        },
+        {
+          "command": "changes-viewer.accept",
+          "when": "timelineItem == timeline.changes-viewer",
+          "group": "changes-viewer@2"
+        },
+        {
+          "command": "changes-viewer.diff",
+          "when": "timelineItem == timeline.changes-viewer",
+          "group": "changes-viewer@3"
+        },
+        {
+          "command": "changes-viewer.showDetails",
+          "when": "timelineItem == timeline.changes-viewer",
+          "group": "changes-viewer@4"
+        }
+      ]
+    },
+    "configuration": {
+      "title": "Changes Viewer",
+      "properties": {
+        "changes-viewer.typingDebounce": {
+          "type": "number",
+          "default": 2000,
+          "description": "Debounce time in milliseconds for creating snapshots when typing text. Prevents creating too many snapshots during active editing.",
+          "minimum": 100,
+          "maximum": 60000
+        },
+        "changes-viewer.fileSystemDebounce": {
+          "type": "number",
+          "default": 1000,
+          "description": "Debounce time in milliseconds for FileSystemWatcher. Prevents creating snapshots too frequently when files are modified externally.",
+          "minimum": 100,
+          "maximum": 60000
+        },
+        "changes-viewer.maxSnapshotsPerFile": {
+          "type": "number",
+          "default": 100,
+          "description": "Maximum number of snapshots to keep per file. Older snapshots will be automatically removed when this limit is reached.",
+          "minimum": 1,
+          "maximum": 10000
+        },
+        "changes-viewer.maxStorageSize": {
+          "type": "number",
+          "default": 524288000,
+          "description": "Maximum storage size in bytes for all snapshots (default: 500 MB). When this limit is reached, oldest snapshots will be removed.",
+          "minimum": 1048576,
+          "maximum": 10737418240
+        },
+        "changes-viewer.ttlDays": {
+          "type": "number",
+          "default": 90,
+          "description": "Time To Live in days for automatic cleanup of old snapshots. Snapshots older than this will be automatically removed.",
+          "minimum": 1,
+          "maximum": 3650
+        },
+        "changes-viewer.maxFileSize": {
+          "type": "number",
+          "default": 52428800,
+          "description": "Maximum file size in bytes (default: 50 MB) for creating snapshots. Files larger than this will not be tracked.",
+          "minimum": 1024,
+          "maximum": 1073741824
+        },
+        "changes-viewer.enableCompression": {
+          "type": "boolean",
+          "default": true,
+          "description": "Enable compression for large files. When enabled, snapshots of files larger than the compression threshold will be compressed to save storage space."
+        },
+        "changes-viewer.compressionThreshold": {
+          "type": "number",
+          "default": 10485760,
+          "description": "File size threshold in bytes (default: 10 MB) for applying compression. Files larger than this threshold will be compressed when compression is enabled.",
+          "minimum": 1024,
+          "maximum": 1073741824
+        },
+        "changes-viewer.enableVerboseLogging": {
+          "type": "boolean",
+          "default": false,
+          "description": "Enable verbose logging (DEBUG level) for debugging and monitoring. When enabled, detailed debug messages will be logged to the Output Channel."
+        }
+      }
+    }
   },
   "devDependencies": {
     "@types/mocha": "^10.0.0",
     "@types/node": "^20.0.0",
-    "@types/vscode": "^1.60.0",
+    "@types/vscode": "^1.64.0",
     "mocha": "^10.0.0",
     "ts-node": "^10.9.0",
     "typescript": "^5.0.0"

@@ -79,6 +79,8 @@ export interface SnapshotFilters {
     accepted: boolean | undefined;
     /** Лимит количества результатов */
     limit: number | undefined;
+    /** ID снапшота для cursor (для пагинации - исключаем снапшоты до этого ID включительно) */
+    cursorId: string | undefined;
 }
 
 /**

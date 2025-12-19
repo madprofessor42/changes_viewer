@@ -35,6 +35,7 @@ var __importStar = (this && this.__importStar) || (function () {
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.ConfigurationService = void 0;
 const vscode = __importStar(require("vscode"));
+const logger_1 = require("../utils/logger");
 /**
  * Сервис для чтения и валидации настроек расширения из VS Code Settings.
  * Предоставляет типизированные методы для получения настроек с значениями по умолчанию.
@@ -43,6 +44,7 @@ class ConfigurationService {
     constructor() {
         this.configSection = 'changes-viewer';
         this.config = vscode.workspace.getConfiguration(this.configSection);
+        this.logger = logger_1.Logger.getInstance();
     }
     /**
      * Возвращает debounce для typing (задержка перед созданием снапшота при вводе текста).
@@ -93,6 +95,30 @@ class ConfigurationService {
         return this.validatePositiveNumber(value, ConfigurationService.DEFAULT_MAX_FILE_SIZE, 'maxFileSize');
     }
     /**
+     * Возвращает, включено ли сжатие для больших файлов.
+     * @returns true, если сжатие включено (по умолчанию true)
+     */
+    getEnableCompression() {
+        const value = this.config.get('enableCompression', ConfigurationService.DEFAULT_ENABLE_COMPRESSION);
+        return value === true;
+    }
+    /**
+     * Возвращает пороговое значение размера файла в байтах для применения сжатия.
+     * @returns Пороговое значение в байтах (по умолчанию 10 MB)
+     */
+    getCompressionThreshold() {
+        const value = this.config.get('compressionThreshold', ConfigurationService.DEFAULT_COMPRESSION_THRESHOLD);
+        return this.validatePositiveNumber(value, ConfigurationService.DEFAULT_COMPRESSION_THRESHOLD, 'compressionThreshold');
+    }
+    /**
+     * Возвращает, включено ли детальное логирование (DEBUG уровень).
+     * @returns true, если детальное логирование включено (по умолчанию false)
+     */
+    getEnableVerboseLogging() {
+        const value = this.config.get('enableVerboseLogging', ConfigurationService.DEFAULT_ENABLE_VERBOSE_LOGGING);
+        return value === true;
+    }
+    /**
      * Подписка на изменения настроек.
      * @param callback Функция, которая будет вызвана при изменении настроек
      * @returns Disposable для отмены подписки
@@ -119,11 +145,11 @@ class ConfigurationService {
             return defaultValue;
         }
         if (typeof value !== 'number' || isNaN(value) || !isFinite(value)) {
-            console.warn(`Invalid value for setting ${this.configSection}.${settingName}: ${value}. Using default: ${defaultValue}`);
+            this.logger.warn(`Invalid value for setting ${this.configSection}.${settingName}: ${value}. Using default: ${defaultValue}`);
             return defaultValue;
         }
         if (value <= 0) {
-            console.warn(`Invalid value for setting ${this.configSection}.${settingName}: ${value} (must be positive). Using default: ${defaultValue}`);
+            this.logger.warn(`Invalid value for setting ${this.configSection}.${settingName}: ${value} (must be positive). Using default: ${defaultValue}`);
             return defaultValue;
         }
         return value;
@@ -137,4 +163,7 @@ ConfigurationService.DEFAULT_MAX_SNAPSHOTS_PER_FILE = 100;
 ConfigurationService.DEFAULT_MAX_STORAGE_SIZE = 524288000; // 500 MB в байтах
 ConfigurationService.DEFAULT_TTL_DAYS = 90;
 ConfigurationService.DEFAULT_MAX_FILE_SIZE = 52428800; // 50 MB в байтах
+ConfigurationService.DEFAULT_ENABLE_COMPRESSION = true;
+ConfigurationService.DEFAULT_COMPRESSION_THRESHOLD = 10485760; // 10 MB в байтах
+ConfigurationService.DEFAULT_ENABLE_VERBOSE_LOGGING = false;
 //# sourceMappingURL=ConfigurationService.js.map

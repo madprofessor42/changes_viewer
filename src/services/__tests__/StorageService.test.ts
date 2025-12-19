@@ -7,6 +7,7 @@ import * as path from 'path';
 import * as os from 'os';
 import * as vscode from 'vscode';
 import { StorageService } from '../StorageService';
+import { ConfigurationService } from '../ConfigurationService';
 import { Snapshot } from '../../types/snapshot';
 
 /**
@@ -23,6 +24,7 @@ describe('StorageService', () => {
     let storageService: StorageService;
     let mockContext: vscode.ExtensionContext;
     let mockGlobalState: vscode.Memento;
+    let mockConfigService: ConfigurationService;
 
     beforeEach(() => {
         // Очищаем мок данные перед каждым тестом
@@ -65,7 +67,10 @@ describe('StorageService', () => {
             languageModelAccessInformation: {} as any
         } as unknown as vscode.ExtensionContext;
 
-        storageService = new StorageService(mockContext);
+        // Создаем реальный ConfigurationService (он не требует моков, так как использует vscode.workspace.getConfiguration)
+        mockConfigService = new ConfigurationService();
+
+        storageService = new StorageService(mockContext, mockConfigService);
     });
 
     afterEach(() => {
@@ -177,6 +182,42 @@ describe('StorageService', () => {
 
             const retrievedContent = await storageService.getSnapshotContent(contentPath);
             assert.strictEqual(retrievedContent, content);
+        });
+
+        it('should compress large files when compression is enabled', async () => {
+            // Создаем большой контент (больше порога сжатия по умолчанию 10 MB)
+            const largeContent = 'x'.repeat(11 * 1024 * 1024); // 11 MB
+            const snapshotId = 'test-snapshot-large';
+            const fileHash = 'a1b2c3d4e5f6g7h8';
+
+            const contentPath = await storageService.saveSnapshotContent(snapshotId, largeContent, fileHash);
+            
+            // Проверяем, что файл имеет расширение .gz
+            assert.ok(contentPath.endsWith('.gz'), 'Large file should be compressed');
+            
+            // Проверяем, что файл действительно сжат (размер меньше оригинала)
+            const absolutePath = path.resolve(tempDir, contentPath);
+            const stats = fs.statSync(absolutePath);
+            assert.ok(stats.size < largeContent.length, 'Compressed file should be smaller than original');
+            
+            // Проверяем, что содержимое корректно распаковывается
+            const retrievedContent = await storageService.getSnapshotContent(contentPath, undefined, { compressed: true });
+            assert.strictEqual(retrievedContent, largeContent);
+        });
+
+        it('should not compress small files', async () => {
+            const smallContent = 'Small content';
+            const snapshotId = 'test-snapshot-small';
+            const fileHash = 'a1b2c3d4e5f6g7h8';
+
+            const contentPath = await storageService.saveSnapshotContent(snapshotId, smallContent, fileHash);
+            
+            // Проверяем, что файл не имеет расширения .gz
+            assert.ok(!contentPath.endsWith('.gz'), 'Small file should not be compressed');
+            
+            // Проверяем, что содержимое корректно читается
+            const retrievedContent = await storageService.getSnapshotContent(contentPath);
+            assert.strictEqual(retrievedContent, smallContent);
         });
 
         it('should throw error for non-existent content file', async () => {

@@ -1,4 +1,5 @@
 import * as vscode from 'vscode';
+import { Logger } from '../utils/logger';
 
 /**
  * Сервис для чтения и валидации настроек расширения из VS Code Settings.
@@ -7,6 +8,7 @@ import * as vscode from 'vscode';
 export class ConfigurationService {
     private readonly configSection = 'changes-viewer';
     private config: vscode.WorkspaceConfiguration;
+    private readonly logger: Logger;
 
     // Значения по умолчанию
     private static readonly DEFAULT_TYPING_DEBOUNCE = 2000; // мс
@@ -15,9 +17,13 @@ export class ConfigurationService {
     private static readonly DEFAULT_MAX_STORAGE_SIZE = 524288000; // 500 MB в байтах
     private static readonly DEFAULT_TTL_DAYS = 90;
     private static readonly DEFAULT_MAX_FILE_SIZE = 52428800; // 50 MB в байтах
+    private static readonly DEFAULT_ENABLE_COMPRESSION = true;
+    private static readonly DEFAULT_COMPRESSION_THRESHOLD = 10485760; // 10 MB в байтах
+    private static readonly DEFAULT_ENABLE_VERBOSE_LOGGING = false;
 
     constructor() {
         this.config = vscode.workspace.getConfiguration(this.configSection);
+        this.logger = Logger.getInstance();
     }
 
     /**
@@ -75,6 +81,33 @@ export class ConfigurationService {
     }
 
     /**
+     * Возвращает, включено ли сжатие для больших файлов.
+     * @returns true, если сжатие включено (по умолчанию true)
+     */
+    getEnableCompression(): boolean {
+        const value = this.config.get<boolean>('enableCompression', ConfigurationService.DEFAULT_ENABLE_COMPRESSION);
+        return value === true;
+    }
+
+    /**
+     * Возвращает пороговое значение размера файла в байтах для применения сжатия.
+     * @returns Пороговое значение в байтах (по умолчанию 10 MB)
+     */
+    getCompressionThreshold(): number {
+        const value = this.config.get<number>('compressionThreshold', ConfigurationService.DEFAULT_COMPRESSION_THRESHOLD);
+        return this.validatePositiveNumber(value, ConfigurationService.DEFAULT_COMPRESSION_THRESHOLD, 'compressionThreshold');
+    }
+
+    /**
+     * Возвращает, включено ли детальное логирование (DEBUG уровень).
+     * @returns true, если детальное логирование включено (по умолчанию false)
+     */
+    getEnableVerboseLogging(): boolean {
+        const value = this.config.get<boolean>('enableVerboseLogging', ConfigurationService.DEFAULT_ENABLE_VERBOSE_LOGGING);
+        return value === true;
+    }
+
+    /**
      * Подписка на изменения настроек.
      * @param callback Функция, которая будет вызвана при изменении настроек
      * @returns Disposable для отмены подписки
@@ -103,12 +136,12 @@ export class ConfigurationService {
         }
 
         if (typeof value !== 'number' || isNaN(value) || !isFinite(value)) {
-            console.warn(`Invalid value for setting ${this.configSection}.${settingName}: ${value}. Using default: ${defaultValue}`);
+            this.logger.warn(`Invalid value for setting ${this.configSection}.${settingName}: ${value}. Using default: ${defaultValue}`);
             return defaultValue;
         }
 
         if (value <= 0) {
-            console.warn(`Invalid value for setting ${this.configSection}.${settingName}: ${value} (must be positive). Using default: ${defaultValue}`);
+            this.logger.warn(`Invalid value for setting ${this.configSection}.${settingName}: ${value} (must be positive). Using default: ${defaultValue}`);
             return defaultValue;
         }
 

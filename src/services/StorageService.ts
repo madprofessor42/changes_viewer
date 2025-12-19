@@ -1,13 +1,20 @@
 import * as vscode from 'vscode';
 import * as fs from 'fs/promises';
 import * as path from 'path';
+import * as zlib from 'zlib';
+import { promisify } from 'util';
 import { Snapshot, StorageMetadata, SnapshotIndex } from '../types/snapshot';
 import { computeHash } from '../utils/hash';
+import { migrateToVersion, getCurrentVersion, isValidVersion } from '../migrations';
+import { migrateToV1_0 } from '../migrations/v1.0';
+import { ConfigurationService } from './ConfigurationService';
+import { Logger } from '../utils/logger';
+import { retryWithBackoff } from '../utils/retry';
 
 /**
  * Структура данных индекса в Memento API
  */
-interface StorageIndex {
+export interface StorageIndex {
     version: string;
     metadata: StorageMetadata;
     snapshots: Snapshot[];
@@ -24,17 +31,32 @@ export class StorageService {
     private readonly storagePath: string;
     private readonly snapshotsDir: string;
     private readonly currentVersion = '1.0';
+    private readonly configService: ConfigurationService;
+    private onSnapshotAccessed?: (snapshotId: string) => void;
+    private readonly gzip = promisify(zlib.gzip);
+    private readonly gunzip = promisify(zlib.gunzip);
+    private readonly logger: Logger;
 
-    constructor(context: vscode.ExtensionContext) {
+    constructor(context: vscode.ExtensionContext, configService: ConfigurationService) {
         this.globalState = context.globalState;
         this.storagePath = context.globalStoragePath;
         this.snapshotsDir = path.join(this.storagePath, 'snapshots');
+        this.configService = configService;
+        this.logger = Logger.getInstance();
         
         // Создаем директорию для снапшотов, если её нет
         // Используем async инициализацию в фоне
         this.ensureSnapshotsDirectory().catch(err => {
-            console.error('Failed to create snapshots directory:', err);
+            this.logger.error('Failed to create snapshots directory', err);
         });
+    }
+
+    /**
+     * Устанавливает callback для обновления времени доступа к снапшотам (для LRU стратегии).
+     * @param callback Функция, которая будет вызвана при доступе к снапшоту
+     */
+    setOnSnapshotAccessed(callback: (snapshotId: string) => void): void {
+        this.onSnapshotAccessed = callback;
     }
 
     /**
@@ -88,8 +110,19 @@ export class StorageService {
         // Обновляем метаданные хранилища
         index.metadata.totalSnapshots = index.snapshots.length;
         
-        // Сохраняем в Memento API
-        await this.globalState.update(this.mementoKey, index);
+        // Сохраняем в Memento API с повторными попытками (максимум 3 попытки)
+        try {
+            await retryWithBackoff(
+                async () => {
+                    await this.globalState.update(this.mementoKey, index);
+                },
+                3, // максимум 3 попытки
+                500 // начальная задержка 500ms
+            );
+        } catch (error) {
+            this.logger.error('Failed to save snapshot metadata to Memento after retries', error);
+            throw new Error(`Failed to save snapshot metadata: ${error instanceof Error ? error.message : String(error)}`);
+        }
     }
 
     /**
@@ -100,6 +133,9 @@ export class StorageService {
     async getSnapshotMetadata(snapshotId: string): Promise<Snapshot | null> {
         const index = await this.getIndex();
         const snapshot = index.snapshots.find(s => s.id === snapshotId);
+        if (snapshot && this.onSnapshotAccessed) {
+            this.onSnapshotAccessed(snapshotId);
+        }
         return snapshot || null;
     }
 
@@ -118,11 +154,19 @@ export class StorageService {
             .filter((s): s is Snapshot => s !== undefined)
             .sort((a, b) => b.timestamp - a.timestamp);
         
+        // Обновляем время доступа для всех полученных снапшотов
+        if (this.onSnapshotAccessed) {
+            for (const snapshot of snapshots) {
+                this.onSnapshotAccessed(snapshot.id);
+            }
+        }
+        
         return snapshots;
     }
 
     /**
      * Сохраняет содержимое снапшота в файловую систему.
+     * Применяет сжатие для больших файлов, если включено в настройках.
      * @param snapshotId ID снапшота
      * @param content Содержимое файла
      * @param fileHash Хеш файла (используется для создания директории)
@@ -141,15 +185,57 @@ export class StorageService {
             await fs.mkdir(fileDir, { recursive: true });
         }
         
-        // Путь к файлу содержимого
-        const fileName = `${snapshotId}.txt`;
-        const filePath = path.join(fileDir, fileName);
+        // Определяем, нужно ли сжимать файл
+        const contentSize = Buffer.byteLength(content, 'utf8');
+        const enableCompression = this.configService.getEnableCompression();
+        const compressionThreshold = this.configService.getCompressionThreshold();
+        const shouldCompress = enableCompression && contentSize > compressionThreshold;
+        
+        let fileName: string;
+        let filePath: string;
+        let dataToWrite: Buffer | string;
+        
+        if (shouldCompress) {
+            // Сжимаем содержимое
+            try {
+                const compressed = await this.gzip(Buffer.from(content, 'utf8'));
+                fileName = `${snapshotId}.txt.gz`;
+                filePath = path.join(fileDir, fileName);
+                dataToWrite = compressed;
+            } catch (error) {
+                // Если сжатие не удалось, сохраняем без сжатия
+                this.logger.warn(`Failed to compress snapshot ${snapshotId}: ${error instanceof Error ? error.message : String(error)}`);
+                fileName = `${snapshotId}.txt`;
+                filePath = path.join(fileDir, fileName);
+                dataToWrite = content;
+            }
+        } else {
+            // Сохраняем без сжатия
+            fileName = `${snapshotId}.txt`;
+            filePath = path.join(fileDir, fileName);
+            dataToWrite = content;
+        }
         
         // Валидация пути (защита от path traversal)
         this.validatePath(filePath);
         
-        // Записываем содержимое
-        await fs.writeFile(filePath, content, 'utf8');
+        // Записываем содержимое (сжатое или нет) с повторными попытками (максимум 3 попытки)
+        try {
+            await retryWithBackoff(
+                async () => {
+                    if (shouldCompress && Buffer.isBuffer(dataToWrite)) {
+                        await fs.writeFile(filePath, dataToWrite);
+                    } else {
+                        await fs.writeFile(filePath, dataToWrite as string, 'utf8');
+                    }
+                },
+                3, // максимум 3 попытки
+                500 // начальная задержка 500ms
+            );
+        } catch (error) {
+            this.logger.error(`Failed to write snapshot content after retries: ${snapshotId}`, error);
+            throw new Error(`Failed to save snapshot content: ${error instanceof Error ? error.message : String(error)}`);
+        }
         
         // Возвращаем относительный путь от storagePath
         // path.relative уже возвращает путь с правильными разделителями для текущей платформы
@@ -159,11 +245,14 @@ export class StorageService {
 
     /**
      * Получает содержимое снапшота из файловой системы.
+     * Автоматически распаковывает сжатые файлы.
      * @param contentPath Относительный путь к файлу содержимого
+     * @param snapshotId ID снапшота (опционально, для обновления времени доступа)
+     * @param snapshotMetadata Метаданные снапшота (опционально, для определения сжатия)
      * @returns Содержимое файла
-     * @throws Error если файл не найден или произошла ошибка чтения
+     * @throws Error если файл не найден или произошла ошибка чтения/распаковки
      */
-    async getSnapshotContent(contentPath: string): Promise<string> {
+    async getSnapshotContent(contentPath: string, snapshotId?: string, snapshotMetadata?: { compressed?: boolean }): Promise<string> {
         // Преобразуем относительный путь в абсолютный
         const absolutePath = path.resolve(this.storagePath, contentPath);
         
@@ -177,12 +266,40 @@ export class StorageService {
             throw new Error(`Snapshot content file not found: ${contentPath}`);
         }
         
-        // Читаем содержимое
+        // Определяем, сжат ли файл (по расширению или метаданным)
+        const isCompressed = snapshotMetadata?.compressed === true || contentPath.endsWith('.gz');
+        
+        // Читаем содержимое с повторными попытками (максимум 3 попытки)
         try {
-            const content = await fs.readFile(absolutePath, 'utf8');
+            const content = await retryWithBackoff(
+                async () => {
+                    if (isCompressed) {
+                        // Читаем сжатый файл как Buffer и распаковываем
+                        const compressedData = await fs.readFile(absolutePath);
+                        const decompressed = await this.gunzip(compressedData);
+                        return decompressed.toString('utf8');
+                    } else {
+                        // Читаем обычный файл
+                        const content = await fs.readFile(absolutePath, 'utf8');
+                        return content;
+                    }
+                },
+                3, // максимум 3 попытки
+                500 // начальная задержка 500ms
+            );
+            
+            // Обновляем время доступа при чтении содержимого
+            if (snapshotId && this.onSnapshotAccessed) {
+                this.onSnapshotAccessed(snapshotId);
+            }
             return content;
         } catch (error) {
-            throw new Error(`Failed to read snapshot content: ${error instanceof Error ? error.message : String(error)}`);
+            this.logger.error(`Failed to read snapshot content after retries: ${contentPath}`, error);
+            if (isCompressed) {
+                throw new Error(`Failed to decompress snapshot content: ${error instanceof Error ? error.message : String(error)}`);
+            } else {
+                throw new Error(`Failed to read snapshot content: ${error instanceof Error ? error.message : String(error)}`);
+            }
         }
     }
 
@@ -265,7 +382,7 @@ export class StorageService {
             const totalSize = await calculateDirSize(this.snapshotsDir);
             return totalSize;
         } catch (error) {
-            console.error('Error calculating storage size:', error);
+            this.logger.error('Error calculating storage size', error);
             throw new Error(`Failed to calculate storage size: ${error instanceof Error ? error.message : String(error)}`);
         }
     }
@@ -279,24 +396,105 @@ export class StorageService {
     }
 
     /**
+     * Получает все снапшоты из хранилища.
+     * Используется CleanupService для проверки лимитов и очистки.
+     * @returns Массив всех снапшотов
+     */
+    async getAllSnapshots(): Promise<Snapshot[]> {
+        const index = await this.getIndex();
+        return index.snapshots || [];
+    }
+
+    /**
+     * Получает индекс хранилища для работы CleanupService.
+     * @returns Индекс хранилища
+     */
+    async getStorageIndex(): Promise<StorageIndex> {
+        return await this.getIndex();
+    }
+
+    /**
+     * Обновляет индекс хранилища после удаления снапшотов.
+     * Используется CleanupService для обновления индекса после очистки.
+     * @param index Обновленный индекс
+     */
+    async updateStorageIndex(index: StorageIndex): Promise<void> {
+        await this.globalState.update(this.mementoKey, index);
+    }
+
+    /**
      * Получает или создает индекс хранилища.
+     * При необходимости выполняет миграции данных до текущей версии.
      * @returns Индекс хранилища
      */
     private async getIndex(): Promise<StorageIndex> {
         const existing = this.globalState.get<StorageIndex>(this.mementoKey);
+        const currentVersion = existing?.version || null;
         
-        if (existing) {
-            // Проверяем версию и обновляем структуру, если нужно
-            if (existing.version !== this.currentVersion) {
-                // В будущем здесь будет миграция данных
-                // Пока просто обновляем версию
-                existing.version = this.currentVersion;
-                await this.globalState.update(this.mementoKey, existing);
+        // Если версия отсутствует или невалидна, инициализируем через миграцию v1.0
+        if (!currentVersion || !isValidVersion(currentVersion)) {
+            if (!isValidVersion(currentVersion) && currentVersion) {
+                this.logger.warn(`Invalid version format: ${currentVersion}. Resetting to 1.0.`);
             }
-            return existing;
+            
+            try {
+                await migrateToV1_0(this.globalState, this.storagePath);
+                const initialized = this.globalState.get<StorageIndex>(this.mementoKey);
+                if (initialized) {
+                    return initialized;
+                }
+            } catch (error) {
+                this.logger.error('Failed to initialize storage', error);
+            }
+            
+            // Fallback: создаем структуру вручную, если миграция не сработала
+            return await this.createDefaultIndex();
         }
         
-        // Создаем новый индекс
+        // Если версия совпадает с текущей, возвращаем существующие данные
+        if (currentVersion === this.currentVersion) {
+            return existing!;
+        }
+        
+        // Выполняем миграцию от текущей версии до целевой
+        try {
+            await migrateToVersion(
+                this.globalState,
+                this.storagePath,
+                currentVersion,
+                this.currentVersion
+            );
+            
+            // После миграции получаем обновленные данные
+            const migrated = this.globalState.get<StorageIndex>(this.mementoKey);
+            if (migrated) {
+                return migrated;
+            }
+        } catch (error) {
+            // Если миграция не удалась, предупреждаем пользователя
+            const errorMessage = error instanceof Error ? error.message : String(error);
+            this.logger.error('Migration failed', new Error(errorMessage));
+            
+            // Показываем предупреждение пользователю
+            vscode.window.showWarningMessage(
+                `Failed to migrate data storage: ${errorMessage}. ` +
+                `Some features may not work correctly. Please report this issue.`,
+                'OK'
+            );
+            
+            // Возвращаем существующие данные (может быть несовместимая версия)
+            return existing!;
+        }
+        
+        // Fallback: возвращаем существующие данные или создаем новую структуру
+        return existing || await this.createDefaultIndex();
+    }
+
+    /**
+     * Создает индекс хранилища со структурой по умолчанию.
+     * @returns Индекс хранилища версии 1.0
+     */
+    private async createDefaultIndex(): Promise<StorageIndex> {
         const newIndex: StorageIndex = {
             version: this.currentVersion,
             metadata: {
