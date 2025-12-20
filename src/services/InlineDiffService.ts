@@ -24,7 +24,7 @@ interface InlineDiffSession {
     // - Added line (from current)
     // - Deleted line (inserted from snapshot)
     lines: {
-        type: 'unchanged' | 'added' | 'deleted';
+        type: 'unchanged' | 'added' | 'deleted' | 'historical';
         content: string;
         originalChange?: DiffChange; // Link to the diff change object
         blockIndex?: number; // Index of the ChangeBlock this line belongs to
@@ -45,6 +45,7 @@ export class InlineDiffService implements vscode.CodeLensProvider, vscode.TextDo
     // Decoration types
     private addedDecorationType: vscode.TextEditorDecorationType;
     private deletedDecorationType: vscode.TextEditorDecorationType;
+    private historicalDecorationType: vscode.TextEditorDecorationType;
 
     constructor(
         private storageService: StorageService,
@@ -62,6 +63,13 @@ export class InlineDiffService implements vscode.CodeLensProvider, vscode.TextDo
             isWholeLine: true,
             textDecoration: 'line-through', // Strikethrough
             overviewRulerColor: 'red',
+            overviewRulerLane: vscode.OverviewRulerLane.Left
+        });
+
+        this.historicalDecorationType = vscode.window.createTextEditorDecorationType({
+            backgroundColor: 'rgba(255, 165, 0, 0.1)', // Orange/Yellow background
+            isWholeLine: true,
+            overviewRulerColor: 'orange',
             overviewRulerLane: vscode.OverviewRulerLane.Left
         });
     }
@@ -235,23 +243,64 @@ export class InlineDiffService implements vscode.CodeLensProvider, vscode.TextDo
             // baseContent = old, newContent = new
             const changes = computeDetailedDiff(baseContent, newContent);
 
+            // Compute historical changes if in snapshot mode
+            const historicalAddedLines = new Set<number>(); // Indices in baseContent
+            if (baseSnapshotId) {
+                try {
+                    const snapshots = await this.historyManager.getSnapshotsForFile(originalUri);
+                    let rootSnapshot = snapshots.find(s => s.accepted);
+                    if (!rootSnapshot && snapshots.length > 0) {
+                        rootSnapshot = snapshots[snapshots.length - 1]; // Oldest
+                    }
+
+                    if (rootSnapshot && rootSnapshot.id !== baseSnapshotId) {
+                        const rootContent = await this.storageService.getSnapshotContent(
+                            rootSnapshot.contentPath,
+                            rootSnapshot.id,
+                            rootSnapshot.metadata
+                        );
+                        if (rootContent !== null) {
+                            const histChanges = computeDetailedDiff(rootContent, baseContent);
+                            for (const change of histChanges) {
+                                if (change.modifiedLength > 0) {
+                                    for (let k = 0; k < change.modifiedLength; k++) {
+                                        historicalAddedLines.add(change.modifiedStart + k);
+                                    }
+                                }
+                            }
+                        }
+                    }
+                } catch (e) {
+                    console.error("Failed to compute historical diff", e);
+                }
+            }
+
             const lines1 = baseContent.split(/\r?\n/);
             const lines2 = newContent.split(/\r?\n/);
 
-        const combinedLines: { type: 'unchanged' | 'added' | 'deleted', content: string, originalChange?: DiffChange, blockIndex?: number }[] = [];
+        const combinedLines: { type: 'unchanged' | 'added' | 'deleted' | 'historical', content: string, originalChange?: DiffChange, blockIndex?: number }[] = [];
         const changeBlocks: ChangeBlock[] = [];
         
-        let currentLineIdx = 0;
+        let currentLineIdx = 0; // Index in lines2
+        let currentOriginalLineIdx = 0; // Index in lines1 (baseContent)
         let currentBlockIndex = -1;
         let lastChangeEndLine = -1;  // Track where last change ended to detect consecutive changes
         
         for (const change of changes) {
             // Add unchanged lines before this change
-            const unchangedStartIdx = combinedLines.length;
-            while (currentLineIdx < change.modifiedStart) {
-                combinedLines.push({ type: 'unchanged', content: lines2[currentLineIdx] });
-                currentLineIdx++;
+            // Unchanged lines exist in BOTH lines1 and lines2
+            const unchangedCount = change.modifiedStart - currentLineIdx;
+            
+            for (let k = 0; k < unchangedCount; k++) {
+                const line1Idx = currentOriginalLineIdx + k;
+                const isHistorical = historicalAddedLines.has(line1Idx);
+                combinedLines.push({ 
+                    type: isHistorical ? 'historical' : 'unchanged', 
+                    content: lines2[currentLineIdx + k] 
+                });
             }
+            currentLineIdx += unchangedCount;
+            currentOriginalLineIdx += unchangedCount;
 
             // Determine if this change should start a new block or continue existing one
             // A new block starts only if there was at least one NON-EMPTY unchanged line since the last change
@@ -303,6 +352,9 @@ export class InlineDiffService implements vscode.CodeLensProvider, vscode.TextDo
                         currentLineIdx++;
                     }
                 }
+                if (change.originalLength > 0) {
+                     currentOriginalLineIdx += change.originalLength;
+                }
                 continue;  // Skip to next change
             }
 
@@ -311,7 +363,12 @@ export class InlineDiffService implements vscode.CodeLensProvider, vscode.TextDo
             if (change.originalLength > 0 && !deletedIgnored) {
                 currentBlock.hasDeleted = true;
                 const deletedLines = change.originalContent;
-                for (const line of deletedLines) {
+                // Deleted lines come from lines1
+                for (let k = 0; k < deletedLines.length; k++) {
+                    const line = deletedLines[k];
+                    // Check if deleted line was historical in base?
+                    // We typically show it as deleted (Red) regardless of history,
+                    // but we could mark it. For now, keep it 'deleted'.
                     combinedLines.push({
                         type: 'deleted',
                         content: line,
@@ -319,6 +376,9 @@ export class InlineDiffService implements vscode.CodeLensProvider, vscode.TextDo
                         blockIndex: currentBlockIndex
                     });
                 }
+                currentOriginalLineIdx += change.originalLength;
+            } else if (change.originalLength > 0 && deletedIgnored) {
+                 currentOriginalLineIdx += change.originalLength;
             }
 
             if (change.modifiedLength > 0) {
@@ -343,8 +403,11 @@ export class InlineDiffService implements vscode.CodeLensProvider, vscode.TextDo
         }
 
         while (currentLineIdx < lines2.length) {
-            combinedLines.push({ type: 'unchanged', content: lines2[currentLineIdx] });
+            const line1Idx = currentOriginalLineIdx; // Logic holds for tail
+            const isHistorical = historicalAddedLines.has(line1Idx);
+            combinedLines.push({ type: isHistorical ? 'historical' : 'unchanged', content: lines2[currentLineIdx] });
             currentLineIdx++;
+            currentOriginalLineIdx++;
         }
 
             // Store session
@@ -400,6 +463,7 @@ export class InlineDiffService implements vscode.CodeLensProvider, vscode.TextDo
 
         const addedRanges: vscode.Range[] = [];
         const deletedRanges: vscode.Range[] = [];
+        const historicalRanges: vscode.Range[] = [];
 
         session.lines.forEach((line, index) => {
             const range = new vscode.Range(index, 0, index, 0); // Whole line
@@ -407,11 +471,14 @@ export class InlineDiffService implements vscode.CodeLensProvider, vscode.TextDo
                 addedRanges.push(range);
             } else if (line.type === 'deleted') {
                 deletedRanges.push(range);
+            } else if (line.type === 'historical') {
+                historicalRanges.push(range);
             }
         });
 
         editor.setDecorations(this.addedDecorationType, addedRanges);
         editor.setDecorations(this.deletedDecorationType, deletedRanges);
+        editor.setDecorations(this.historicalDecorationType, historicalRanges);
     }
 
     // CodeLens Provider implementation - one CodeLens per ChangeBlock (group of consecutive changes)
