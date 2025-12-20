@@ -444,6 +444,33 @@ class InlineDiffService {
             logger_1.Logger.getInstance().warn(`Failed to close diff viewer tab: ${error}`);
         }
     }
+    /**
+     * Close all inline diff viewers for a specific file.
+     * Used when file state changes and there are no more diffs to show.
+     *
+     * @param fileUri URI of the original file
+     */
+    async closeInlineDiffForFile(fileUri) {
+        const fileUriString = fileUri.toString();
+        logger_1.Logger.getInstance().debug(`Closing all diff viewers for file: ${fileUri.fsPath}`);
+        // Find all virtual URIs that correspond to this file
+        const virtualUrisToClose = [];
+        for (const [virtualUriString, state] of this.resourceState.entries()) {
+            if (state.originalUri.toString() === fileUriString) {
+                virtualUrisToClose.push(virtualUriString);
+            }
+        }
+        // Close all matching virtual documents
+        for (const virtualUriString of virtualUrisToClose) {
+            const virtualUri = vscode.Uri.parse(virtualUriString);
+            // Clear session and state
+            this.clearSession(virtualUriString);
+            this.resourceState.delete(virtualUriString);
+            // Close the editor tab
+            await this.closeDiffViewerTab(virtualUri);
+        }
+        logger_1.Logger.getInstance().debug(`Closed ${virtualUrisToClose.length} diff viewer(s) for file: ${fileUri.fsPath}`);
+    }
     updateDecorations(editor) {
         const session = this.sessions.get(editor.document.uri.toString());
         if (!session)
@@ -721,12 +748,9 @@ class InlineDiffService {
                     // If we only did "Approves", this will be a duplicate of the latest snapshot and be skipped (returning the existing one).
                     await this.historyManager.createSnapshot(originalUri, currentContent, 'manual');
                     // Approve all (squash)
-                    await (0, approveAllChangesCommand_1.approveAllChangesCommand)(this.historyManager, this.storageService, originalUri, { silent: true });
-                    // Clear session
-                    this.clearSession(virtualUri.toString());
-                    // Close the diff viewer tab since all changes are approved
-                    await this.closeDiffViewerTab(virtualUri);
-                    logger_1.Logger.getInstance().debug(`Closed diff viewer for ${originalUri.fsPath} after approving all changes`);
+                    // Pass 'this' to let approveAllChangesCommand close the diff viewer
+                    await (0, approveAllChangesCommand_1.approveAllChangesCommand)(this.historyManager, this.storageService, originalUri, { silent: true }, this);
+                    // Note: clearSession and closeDiffViewerTab are now handled by closeInlineDiffForFile in approveAllChangesCommand
                 }
             }
         }

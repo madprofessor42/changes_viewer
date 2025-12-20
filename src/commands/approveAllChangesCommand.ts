@@ -19,7 +19,7 @@ export interface ApproveAllOptions {
  * @param storageService Storage service
  * @param fileUri URI of the file to approve
  * @param options Optional parameters
- * @param inlineDiffService Optional InlineDiffService to update active diff views
+ * @param inlineDiffService Optional InlineDiffService to close diff viewers after approval
  */
 export async function approveAllChangesCommand(
     historyManager: LocalHistoryManager,
@@ -154,11 +154,9 @@ export async function approveAllChangesCommand(
                 }
                 logger.info(`Approved and squashed snapshots for ${fileUri.fsPath}. Kept: ${snapshotToKeep.id}`);
 
-                // 7. Update InlineDiffService if provided
+                // 7. Close inline diff viewers for this file since all changes are approved
                 if (inlineDiffService) {
-                    // Update the active diff session to use the new approved snapshot as base
-                    // This will refresh the view and should show no differences (since current content == approved snapshot)
-                    await inlineDiffService.openInlineDiffDocument(fileUri, snapshotToKeep.id);
+                    await inlineDiffService.closeInlineDiffForFile(fileUri);
                 }
 
             } catch (error) {

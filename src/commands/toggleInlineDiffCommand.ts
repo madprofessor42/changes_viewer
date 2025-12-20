@@ -70,14 +70,15 @@ export async function toggleInlineDiffCommand(
                 
                 // The snapshot BEFORE the restore is at index + 1 (newer snapshots are at lower indices)
                 if (clickedIndex < snapshots.length - 1) {
-                    // targetSnapshotId = snapshot before restore (the state we were in before restoring)
-                    targetSnapshotId = snapshots[clickedIndex + 1].id;
-                    // baseSnapshotId = snapshot we restored from (the old state we went back to)
-                    baseSnapshotId = clickedSnapshot.metadata.restoredFrom;
+                    // For restore: show what changes the restore operation brought
+                    // baseSnapshotId = snapshot BEFORE restore (old state that we're leaving)
+                    baseSnapshotId = snapshots[clickedIndex + 1].id;
+                    // targetSnapshotId = snapshot we restored FROM (new state after restore)
+                    targetSnapshotId = clickedSnapshot.metadata.restoredFrom;
                     
                     Logger.getInstance().debug(
-                        `Showing restore diff: comparing snapshot ${targetSnapshotId} (before restore) ` +
-                        `vs ${baseSnapshotId} (restored from)`
+                        `Showing restore diff: base=${baseSnapshotId} (before restore) ` +
+                        `vs target=${targetSnapshotId} (restored to this state)`
                     );
                 } else {
                     // This restored snapshot is the oldest - nothing to compare
