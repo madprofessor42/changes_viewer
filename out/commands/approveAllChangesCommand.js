@@ -45,11 +45,14 @@ const diff_1 = require("../utils/diff");
  * @param historyManager History manager
  * @param storageService Storage service
  * @param fileUri URI of the file to approve
+ * @param options Optional parameters
  */
-async function approveAllChangesCommand(historyManager, storageService, fileUri) {
+async function approveAllChangesCommand(historyManager, storageService, fileUri, options) {
     const logger = logger_1.Logger.getInstance();
     if (!fileUri) {
-        logger.warn('ApproveAllChanges command called without fileUri');
+        if (!options?.silent) {
+            logger.warn('ApproveAllChanges command called without fileUri');
+        }
         return;
     }
     logger.info(`ApproveAllChanges command started for file: ${fileUri.fsPath}`);
@@ -57,14 +60,18 @@ async function approveAllChangesCommand(historyManager, storageService, fileUri)
         // 1. Get all snapshots
         const snapshots = await historyManager.getSnapshotsForFile(fileUri);
         if (snapshots.length === 0) {
-            vscode.window.showInformationMessage('No changes to approve.');
+            if (!options?.silent) {
+                vscode.window.showInformationMessage('No changes to approve.');
+            }
             return;
         }
         // 2. Identify snapshots to squash
         // We look for the sequence of unaccepted snapshots starting from the top (newest).
         // If the newest snapshot is already accepted, there is nothing to approve.
         if (snapshots[0].accepted) {
-            vscode.window.showInformationMessage('All changes are already approved.');
+            if (!options?.silent) {
+                vscode.window.showInformationMessage('All changes are already approved.');
+            }
             return;
         }
         const lastApprovedIndex = snapshots.findIndex(s => s.accepted);
@@ -89,14 +96,10 @@ async function approveAllChangesCommand(historyManager, storageService, fileUri)
         }
         // 3. Confirm with user? (Implicitly requested by user: "Approve" button)
         // No confirmation dialog needed for now as it's an explicit action.
-        await vscode.window.withProgress({
-            location: vscode.ProgressLocation.Notification,
-            title: "Approving and squashing changes...",
-            cancellable: false
-        }, async (progress) => {
+        const processApprove = async (progress) => {
             // 4. Delete intermediate snapshots
             if (snapshotsToDelete.length > 0) {
-                progress.report({ message: `Deleting ${snapshotsToDelete.length} intermediate snapshots...` });
+                progress?.report({ message: `Deleting ${snapshotsToDelete.length} intermediate snapshots...` });
                 const idsToDelete = snapshotsToDelete.map(s => s.id);
                 try {
                     await historyManager.deleteSnapshots(idsToDelete);
@@ -114,7 +117,7 @@ async function approveAllChangesCommand(historyManager, storageService, fileUri)
             const previousSnapshotForDiff = lastApprovedIndex !== -1 ? snapshots[lastApprovedIndex] : preservedBaseSnapshot;
             if (previousSnapshotForDiff) {
                 try {
-                    progress.report({ message: "Computing cumulative diff..." });
+                    progress?.report({ message: "Computing cumulative diff..." });
                     // Get content of snapshotToKeep
                     const contentToKeep = await storageService.getSnapshotContent(snapshotToKeep.contentPath, snapshotToKeep.id, snapshotToKeep.metadata);
                     // Get content of previous snapshot
@@ -135,25 +138,41 @@ async function approveAllChangesCommand(historyManager, storageService, fileUri)
                 newDiffInfo = undefined;
             }
             // 6. Update the kept snapshot
-            progress.report({ message: "Updating approved snapshot..." });
+            progress?.report({ message: "Updating approved snapshot..." });
             try {
                 await historyManager.updateSnapshot(snapshotToKeep.id, {
                     accepted: true,
                     acceptedTimestamp: Date.now(),
                     diffInfo: newDiffInfo
                 });
-                vscode.window.showInformationMessage('Changes approved and squashed successfully.');
+                if (!options?.silent) {
+                    vscode.window.showInformationMessage('Changes approved and squashed successfully.');
+                }
                 logger.info(`Approved and squashed snapshots for ${fileUri.fsPath}. Kept: ${snapshotToKeep.id}`);
             }
             catch (error) {
                 logger.error(`Failed to update snapshot ${snapshotToKeep.id}`, error);
-                vscode.window.showErrorMessage(`Failed to update snapshot: ${error instanceof Error ? error.message : String(error)}`);
+                if (!options?.silent) {
+                    vscode.window.showErrorMessage(`Failed to update snapshot: ${error instanceof Error ? error.message : String(error)}`);
+                }
             }
-        });
+        };
+        if (options?.silent) {
+            await processApprove();
+        }
+        else {
+            await vscode.window.withProgress({
+                location: vscode.ProgressLocation.Notification,
+                title: "Approving and squashing changes...",
+                cancellable: false
+            }, processApprove);
+        }
     }
     catch (error) {
         logger.error('Error in approveAllChangesCommand', error);
-        vscode.window.showErrorMessage(`Failed to approve changes: ${error instanceof Error ? error.message : String(error)}`);
+        if (!options?.silent) {
+            vscode.window.showErrorMessage(`Failed to approve changes: ${error instanceof Error ? error.message : String(error)}`);
+        }
     }
 }
 //# sourceMappingURL=approveAllChangesCommand.js.map

@@ -4,6 +4,11 @@ import { StorageService } from '../services/StorageService';
 import { restoreCommand } from './restoreCommand';
 import { Logger } from '../utils/logger';
 
+export interface DiscardAllOptions {
+    silent?: boolean;
+    skipRestore?: boolean;
+}
+
 /**
  * Command to discard all changes for a file, reverting to the last accepted snapshot (or base).
  * This deletes all intermediate snapshots and reverts the file.
@@ -11,16 +16,20 @@ import { Logger } from '../utils/logger';
  * @param historyManager Local history manager
  * @param storageService Storage service
  * @param fileUri URI of the file
+ * @param options Optional parameters
  */
 export async function discardAllChangesCommand(
     historyManager: LocalHistoryManager,
     storageService: StorageService,
-    fileUri: vscode.Uri | undefined
+    fileUri: vscode.Uri | undefined,
+    options?: DiscardAllOptions
 ): Promise<void> {
     const logger = Logger.getInstance();
 
     if (!fileUri) {
-        vscode.window.showErrorMessage('No file selected.');
+        if (!options?.silent) {
+            vscode.window.showErrorMessage('No file selected.');
+        }
         return;
     }
 
@@ -29,7 +38,9 @@ export async function discardAllChangesCommand(
         const snapshots = await historyManager.getSnapshotsForFile(fileUri);
         
         if (snapshots.length === 0) {
-            vscode.window.showInformationMessage('No snapshots found to revert to.');
+            if (!options?.silent) {
+                vscode.window.showInformationMessage('No snapshots found to revert to.');
+            }
             return;
         }
 
@@ -55,26 +66,23 @@ export async function discardAllChangesCommand(
         const deletedCountText = snapshotsToDelete.length > 0 ? ` and delete ${snapshotsToDelete.length} intermediate snapshot(s)` : '';
 
         // 4. Confirm with user
-        const choice = await vscode.window.showWarningMessage(
-            `Discard all changes for "${vscode.workspace.asRelativePath(fileUri)}"?\n\nThis will revert the file to the ${versionLabel} (${timestamp})${deletedCountText}.`,
-            { modal: true },
-            'Discard Changes',
-            'Cancel'
-        );
+        if (!options?.silent) {
+            const choice = await vscode.window.showWarningMessage(
+                `Discard all changes for "${vscode.workspace.asRelativePath(fileUri)}"?\n\nThis will revert the file to the ${versionLabel} (${timestamp})${deletedCountText}.`,
+                { modal: true },
+                'Discard Changes',
+                'Cancel'
+            );
 
-        if (choice !== 'Discard Changes') {
-            return;
+            if (choice !== 'Discard Changes') {
+                return;
+            }
         }
 
-        await vscode.window.withProgress({
-            location: vscode.ProgressLocation.Notification,
-            title: "Discarding changes...",
-            cancellable: false
-        }, async (progress) => {
-
+        const processDiscard = async (progress?: vscode.Progress<{ message?: string }>) => {
             // 5. Delete intermediate snapshots
             if (snapshotsToDelete.length > 0) {
-                progress.report({ message: "Deleting intermediate snapshots..." });
+                progress?.report({ message: "Deleting intermediate snapshots..." });
                 const idsToDelete = snapshotsToDelete.map(s => s.id);
                 try {
                     await historyManager.deleteSnapshots(idsToDelete);
@@ -86,23 +94,39 @@ export async function discardAllChangesCommand(
             }
 
             // 6. Restore file content
-            progress.report({ message: "Restoring file..." });
-            
-            await restoreCommand(
-                historyManager, 
-                storageService, 
-                targetSnapshot.id,
-                {
-                    skipConfirmation: true,
-                    skipBackup: true, // Do not create a backup of the discarded state
-                    ignoreUnsavedChanges: true // Discard unsaved changes in editor too
-                }
-            );
-        });
+            if (!options?.skipRestore) {
+                progress?.report({ message: "Restoring file..." });
+                
+                await restoreCommand(
+                    historyManager, 
+                    storageService, 
+                    targetSnapshot.id,
+                    {
+                        skipConfirmation: true,
+                        skipBackup: true, // Do not create a backup of the discarded state
+                        ignoreUnsavedChanges: true // Discard unsaved changes in editor too
+                    }
+                );
+            } else {
+                logger.info(`Skipping restore for ${fileUri.fsPath} as requested (snapshot deletion only)`);
+            }
+        };
+
+        if (options?.silent) {
+            await processDiscard();
+        } else {
+            await vscode.window.withProgress({
+                location: vscode.ProgressLocation.Notification,
+                title: "Discarding changes...",
+                cancellable: false
+            }, processDiscard);
+        }
 
     } catch (error) {
         const errorMessage = error instanceof Error ? error.message : String(error);
         logger.error(`Failed to discard changes for file ${fileUri.fsPath}`, error);
-        vscode.window.showErrorMessage(`Failed to discard changes: ${errorMessage}`);
+        if (!options?.silent) {
+            vscode.window.showErrorMessage(`Failed to discard changes: ${errorMessage}`);
+        }
     }
 }

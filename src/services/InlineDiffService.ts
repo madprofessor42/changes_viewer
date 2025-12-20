@@ -5,6 +5,8 @@ import { computeDetailedDiff, DiffChange } from '../utils/diff';
 import { LocalHistoryManager } from './LocalHistoryManager';
 import { computeHash } from '../utils/hash';
 import { Logger } from '../utils/logger';
+import { approveAllChangesCommand } from '../commands/approveAllChangesCommand';
+import { discardAllChangesCommand } from '../commands/discardAllChangesCommand';
 
 // A grouped block of consecutive changes (without unchanged lines between them)
 interface ChangeBlock {
@@ -248,9 +250,32 @@ export class InlineDiffService implements vscode.CodeLensProvider, vscode.TextDo
             if (baseSnapshotId) {
                 try {
                     const snapshots = await this.historyManager.getSnapshotsForFile(originalUri);
-                    let rootSnapshot = snapshots.find(s => s.accepted);
-                    if (!rootSnapshot && snapshots.length > 0) {
-                        rootSnapshot = snapshots[snapshots.length - 1]; // Oldest
+                    
+                    // Find the base snapshot to determine where we are in history
+                    const baseIndex = snapshots.findIndex(s => s.id === baseSnapshotId);
+                    let rootSnapshot: Snapshot | undefined;
+                    
+                    if (baseIndex >= 0) {
+                        const baseSnapshot = snapshots[baseIndex];
+                        if (baseSnapshot.accepted) {
+                            // If base is accepted, it serves as the root. No historical diff needed.
+                            rootSnapshot = baseSnapshot;
+                        } else {
+                            // Base is unaccepted. Find the nearest accepted snapshot OLDER than base.
+                            rootSnapshot = snapshots.slice(baseIndex + 1).find(s => s.accepted);
+                            
+                            // Fallback to the absolute oldest snapshot if no accepted base found,
+                            // provided baseSnapshotId is not itself the oldest.
+                            if (!rootSnapshot && baseIndex < snapshots.length - 1) {
+                                rootSnapshot = snapshots[snapshots.length - 1];
+                            }
+                        }
+                    } else {
+                        // Fallback if baseSnapshotId not found in current list (shouldn't happen)
+                        rootSnapshot = snapshots.find(s => s.accepted);
+                         if (!rootSnapshot && snapshots.length > 0) {
+                            rootSnapshot = snapshots[snapshots.length - 1];
+                        }
                     }
 
                     if (rootSnapshot && rootSnapshot.id !== baseSnapshotId) {
@@ -607,6 +632,9 @@ export class InlineDiffService implements vscode.CodeLensProvider, vscode.TextDo
                 this.refreshAllDecorations();
                 this._onDidChangeCodeLenses.fire();
             }, 150);
+            
+            // Check if we have reached a "Done" state
+            await this.checkAndProcessCompletion(uri, originalFileUri, session);
             return;
         }
 
@@ -652,6 +680,98 @@ export class InlineDiffService implements vscode.CodeLensProvider, vscode.TextDo
                 this.refreshAllDecorations();
                 this._onDidChangeCodeLenses.fire();
             }, 150);
+        }
+
+        // Check if we have reached a "Done" state (All Approved or All Reverted)
+        await this.checkAndProcessCompletion(uri, originalFileUri, session);
+    }
+
+    private async checkAndProcessCompletion(virtualUri: vscode.Uri, originalUri: vscode.Uri, session: InlineDiffSession) {
+        try {
+            // 1. Get current content
+            // We need to read from the document to get the latest state after edits
+            let currentContent: string;
+            const openDoc = vscode.workspace.textDocuments.find(d => d.uri.toString() === originalUri.toString());
+            if (openDoc) {
+                currentContent = openDoc.getText();
+            } else {
+                const fileData = await vscode.workspace.fs.readFile(originalUri);
+                currentContent = Buffer.from(fileData).toString('utf8');
+            }
+
+            // 2. Get base content
+            const baseContent = session.originalContent;
+
+            // 3. Compute diff
+            const changes = computeDetailedDiff(baseContent, currentContent);
+            
+            // 4. Retrieve state to check ignored changes
+            const state = this.resourceState.get(virtualUri.toString());
+            const ignoredChanges = state?.ignoredChanges || new Set<string>();
+
+            if (changes.length === 0) {
+                // Case 1: Identical to base (All changes reverted)
+                Logger.getInstance().info(`File ${originalUri.fsPath} is identical to base snapshot. Discarding intermediate snapshots.`);
+                
+                // Resume snapshot creation (cleanup)
+                this.historyManager.resumeSnapshotCreation(originalUri);
+
+                await discardAllChangesCommand(
+                    this.historyManager,
+                    this.storageService,
+                    originalUri,
+                    { silent: true, skipRestore: true }
+                );
+
+                // Clear session as we are done
+                this.clearSession(virtualUri.toString());
+                
+                // Close the diff editor if possible? 
+                // We can't easily close a specific editor tab via API without hacks, 
+                // but the content will update to show no changes or error.
+                // Since we deleted snapshots, the view might error out on next render if we don't clear.
+                
+            } else {
+                // Case 2: Not identical. Check if all remaining changes are approved (ignored).
+                // We check if every change signature is present in ignoredChanges.
+                
+                let allApproved = true;
+                for (const change of changes) {
+                    const deletedIgnored = change.originalLength > 0 ? ignoredChanges.has(this.getChangeSignature(change, 'deleted')) : true;
+                    const addedIgnored = change.modifiedLength > 0 ? ignoredChanges.has(this.getChangeSignature(change, 'added')) : true;
+                    
+                    if (!deletedIgnored || !addedIgnored) {
+                        allApproved = false;
+                        break;
+                    }
+                }
+
+                if (allApproved) {
+                    // Case 2b: All differences are approved.
+                    Logger.getInstance().info(`All changes in ${originalUri.fsPath} are approved. Squashing snapshots.`);
+
+                    // Resume snapshot creation to allow creating the "Final Accepted" snapshot
+                    this.historyManager.resumeSnapshotCreation(originalUri);
+                    
+                    // Create a snapshot of the current state (which includes approved changes)
+                    // This is needed because if we did "Undos" (reverts), the file state is new and wasn't snapshotted yet (due to pause).
+                    // If we only did "Approves", this will be a duplicate of the latest snapshot and be skipped (returning the existing one).
+                    await this.historyManager.createSnapshot(originalUri, currentContent, 'manual');
+
+                    // Approve all (squash)
+                    await approveAllChangesCommand(
+                        this.historyManager,
+                        this.storageService,
+                        originalUri,
+                        { silent: true }
+                    );
+
+                    // Clear session
+                    this.clearSession(virtualUri.toString());
+                }
+            }
+        } catch (error) {
+            Logger.getInstance().error('Error checking completion status in InlineDiffService', error);
         }
     }
 
