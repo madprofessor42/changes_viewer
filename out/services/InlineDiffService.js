@@ -129,12 +129,14 @@ class InlineDiffService {
     // TextDocumentContentProvider implementation
     async provideTextDocumentContent(uri) {
         try {
+            logger_1.Logger.getInstance().debug(`provideTextDocumentContent called for ${uri.toString()}`);
             // Retrieve state
             const state = this.resourceState.get(uri.toString());
             if (!state) {
                 return `Error: No diff state found for ${uri.toString()}`;
             }
             const { snapshotId, baseSnapshotId, originalUri, ignoredChanges } = state;
+            logger_1.Logger.getInstance().debug(`  snapshotId=${snapshotId}, baseSnapshotId=${baseSnapshotId}, ignoredChanges=${ignoredChanges.size}`);
             // Two modes:
             // 1. baseSnapshotId is set: Compare snapshotId (newer) vs baseSnapshotId (older) - for clicking on snapshot
             // 2. baseSnapshotId is NOT set: Compare current file vs snapshotId (base) - for clicking on file
@@ -496,18 +498,28 @@ class InlineDiffService {
      * Apply action to an entire block of consecutive changes
      */
     async applyBlockAction(uri, snapshotId, blockIndex, action) {
+        logger_1.Logger.getInstance().debug(`applyBlockAction called: action=${action}, blockIndex=${blockIndex}, snapshotId=${snapshotId}`);
         // Retrieve state and session
         const state = this.resourceState.get(uri.toString());
         const session = this.sessions.get(uri.toString());
         if (!state || !session) {
+            logger_1.Logger.getInstance().error(`Session not found for uri: ${uri.toString()}`);
             vscode.window.showErrorMessage("Could not determine session state (session expired)");
             return;
         }
         const originalFileUri = state.originalUri;
         const block = session.changeBlocks[blockIndex];
         if (!block) {
+            logger_1.Logger.getInstance().error(`Block ${blockIndex} not found. Total blocks: ${session.changeBlocks.length}`);
             vscode.window.showErrorMessage("Change block not found");
             return;
+        }
+        logger_1.Logger.getInstance().debug(`Block ${blockIndex} has ${block.changes.length} changes, hasAdded=${block.hasAdded}, hasDeleted=${block.hasDeleted}`);
+        // Log details about changes in the block
+        for (let i = 0; i < block.changes.length; i++) {
+            const change = block.changes[i];
+            logger_1.Logger.getInstance().debug(`  Block change ${i}: originalStart=${change.originalStart}, originalLength=${change.originalLength}, ` +
+                `modifiedStart=${change.modifiedStart}, modifiedLength=${change.modifiedLength}`);
         }
         if (action === 'approve') {
             // Mark all changes in the block as ignored
@@ -553,34 +565,45 @@ class InlineDiffService {
             return;
         }
         // Undo action - need to revert changes in the original file
-        // Process changes in reverse order to maintain line positions
-        const workspaceEdit = new vscode.WorkspaceEdit();
-        // First, collect all the edits we need to make
-        // We need to handle them carefully to avoid position conflicts
-        // Sort changes by position in reverse order
+        // Use a simpler approach: read current content, apply changes as string operations, write back
+        // Get the current document content
+        const currentDoc = await vscode.workspace.openTextDocument(originalFileUri);
+        const currentContent = currentDoc.getText();
+        const currentLines = currentContent.split(/\r?\n/);
+        logger_1.Logger.getInstance().debug(`  Current file has ${currentLines.length} lines before undo`);
+        // Sort changes by position in reverse order to maintain line positions
         const sortedChanges = [...block.changes].sort((a, b) => b.modifiedStart - a.modifiedStart);
+        let modifiedLines = [...currentLines];
         for (const change of sortedChanges) {
+            logger_1.Logger.getInstance().debug(`  Processing change: originalStart=${change.originalStart}, originalLength=${change.originalLength}, ` +
+                `modifiedStart=${change.modifiedStart}, modifiedLength=${change.modifiedLength}`);
+            // First, remove added lines
             if (change.modifiedLength > 0) {
-                // Delete added lines
-                const startPos = new vscode.Position(change.modifiedStart, 0);
-                const endPos = new vscode.Position(change.modifiedStart + change.modifiedLength, 0);
-                const range = new vscode.Range(startPos, endPos);
-                workspaceEdit.delete(originalFileUri, range);
+                logger_1.Logger.getInstance().debug(`  Removing ${change.modifiedLength} lines starting at ${change.modifiedStart}. ` +
+                    `Content: ${JSON.stringify(change.modifiedContent.slice(0, 2))}`);
+                modifiedLines.splice(change.modifiedStart, change.modifiedLength);
             }
+            // Then, insert deleted lines back
             if (change.originalLength > 0) {
-                // Restore deleted lines
-                const textToInsert = change.originalContent.join('\n') + '\n';
-                const position = new vscode.Position(change.modifiedStart, 0);
-                workspaceEdit.insert(originalFileUri, position, textToInsert);
+                logger_1.Logger.getInstance().debug(`  Inserting ${change.originalLength} lines at position ${change.modifiedStart}. ` +
+                    `Content: ${JSON.stringify(change.originalContent.slice(0, 2))}`);
+                modifiedLines.splice(change.modifiedStart, 0, ...change.originalContent);
             }
         }
+        logger_1.Logger.getInstance().debug(`  File will have ${modifiedLines.length} lines after undo`);
+        // Create workspace edit to replace entire file content
+        const workspaceEdit = new vscode.WorkspaceEdit();
+        const fullRange = new vscode.Range(new vscode.Position(0, 0), new vscode.Position(currentDoc.lineCount, 0));
+        workspaceEdit.replace(originalFileUri, fullRange, modifiedLines.join('\n'));
         // Apply edit to original file
         if (workspaceEdit.size > 0) {
+            logger_1.Logger.getInstance().info(`Applying undo to file: ${originalFileUri.fsPath}, block has ${block.changes.length} changes`);
             // Pause snapshot creation to prevent "revert" from creating a new snapshot
             this.historyManager.pauseSnapshotCreation(originalFileUri, 3000);
             await vscode.workspace.applyEdit(workspaceEdit);
             const doc = await vscode.workspace.openTextDocument(originalFileUri);
             await doc.save();
+            logger_1.Logger.getInstance().debug(`File saved after undo. Re-rendering virtual document...`);
             this._onDidChange.fire(uri);
             // Allow time for content to update, then refresh decorations
             setTimeout(() => {
@@ -588,11 +611,15 @@ class InlineDiffService {
                 this._onDidChangeCodeLenses.fire();
             }, 150);
         }
+        else {
+            logger_1.Logger.getInstance().warn(`Undo called but workspaceEdit is empty for block ${blockIndex}`);
+        }
         // Check if we have reached a "Done" state (All Approved or All Reverted)
         await this.checkAndProcessCompletion(uri, originalFileUri, session);
     }
     async checkAndProcessCompletion(virtualUri, originalUri, session) {
         try {
+            logger_1.Logger.getInstance().debug(`Checking completion state for ${originalUri.fsPath}, snapshotId=${session.snapshotId}`);
             // 1. Get current content
             // We need to read from the document to get the latest state after edits
             let currentContent;
@@ -606,8 +633,24 @@ class InlineDiffService {
             }
             // 2. Get base content
             const baseContent = session.originalContent;
+            logger_1.Logger.getInstance().debug(`Base content length: ${baseContent.length}, current content length: ${currentContent.length}`);
             // 3. Compute diff
             const changes = (0, diff_1.computeDetailedDiff)(baseContent, currentContent);
+            logger_1.Logger.getInstance().debug(`Found ${changes.length} changes between base and current file`);
+            if (changes.length > 0) {
+                // Log details about remaining changes
+                for (let i = 0; i < Math.min(changes.length, 3); i++) {
+                    const change = changes[i];
+                    logger_1.Logger.getInstance().debug(`  Change ${i}: originalStart=${change.originalStart}, originalLength=${change.originalLength}, ` +
+                        `modifiedStart=${change.modifiedStart}, modifiedLength=${change.modifiedLength}`);
+                    if (change.modifiedLength > 0) {
+                        logger_1.Logger.getInstance().debug(`    Added content: ${JSON.stringify(change.modifiedContent.slice(0, 2))}`);
+                    }
+                    if (change.originalLength > 0) {
+                        logger_1.Logger.getInstance().debug(`    Deleted content: ${JSON.stringify(change.originalContent.slice(0, 2))}`);
+                    }
+                }
+            }
             // 4. Retrieve state to check ignored changes
             const state = this.resourceState.get(virtualUri.toString());
             const ignoredChanges = state?.ignoredChanges || new Set();
