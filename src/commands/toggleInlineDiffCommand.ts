@@ -57,32 +57,51 @@ export async function toggleInlineDiffCommand(
             // Check if the clicked snapshot is a "Restored" snapshot
             const clickedSnapshot = snapshots.find(s => s.id === targetSnapshotId);
             if (clickedSnapshot?.metadata?.restoredFrom) {
-                // If it is restored, user likely wants to see the diff of the ORIGINAL snapshot
-                // to understand what state they returned to.
-                // Try to find the original snapshot in history
-                const originalSnapshot = snapshots.find(s => s.id === clickedSnapshot.metadata.restoredFrom);
-                if (originalSnapshot) {
-                    targetSnapshotId = originalSnapshot.id;
-                    // Note: We switch target to original, and then logic below will find ITS previous snapshot
+                // For a "Restored" snapshot, show the diff between:
+                // - Base: the snapshot we restored FROM (restoredFrom)
+                // - Target: the snapshot that existed BEFORE the restore operation
+                
+                const clickedIndex = snapshots.findIndex(s => s.id === targetSnapshotId);
+                
+                if (clickedIndex === -1) {
+                    vscode.window.showErrorMessage('Restored snapshot not found in history.');
+                    return;
                 }
-            }
-
-            // Find the index of the target snapshot (either clicked or redirected)
-            const targetIndex = snapshots.findIndex(s => s.id === targetSnapshotId);
-            
-            if (targetIndex === -1) {
-                vscode.window.showErrorMessage('Snapshot not found in history.');
-                return;
-            }
-            
-            // The previous snapshot is at index + 1 (snapshots are sorted newest first)
-            if (targetIndex < snapshots.length - 1) {
-                baseSnapshotId = snapshots[targetIndex + 1].id;
+                
+                // The snapshot BEFORE the restore is at index + 1 (newer snapshots are at lower indices)
+                if (clickedIndex < snapshots.length - 1) {
+                    // targetSnapshotId = snapshot before restore (the state we were in before restoring)
+                    targetSnapshotId = snapshots[clickedIndex + 1].id;
+                    // baseSnapshotId = snapshot we restored from (the old state we went back to)
+                    baseSnapshotId = clickedSnapshot.metadata.restoredFrom;
+                    
+                    Logger.getInstance().debug(
+                        `Showing restore diff: comparing snapshot ${targetSnapshotId} (before restore) ` +
+                        `vs ${baseSnapshotId} (restored from)`
+                    );
+                } else {
+                    // This restored snapshot is the oldest - nothing to compare
+                    vscode.window.showInformationMessage('This is the oldest snapshot. No previous version to compare.');
+                    return;
+                }
             } else {
-                // This is the oldest snapshot - no previous snapshot to compare
-                // Show it as "base" compared to empty content or just show the content
-                vscode.window.showInformationMessage('This is the oldest snapshot. No previous version to compare.');
-                return;
+                // Not a restored snapshot - normal flow
+                // Find the index of the target snapshot
+                const targetIndex = snapshots.findIndex(s => s.id === targetSnapshotId);
+                
+                if (targetIndex === -1) {
+                    vscode.window.showErrorMessage('Snapshot not found in history.');
+                    return;
+                }
+                
+                // The previous snapshot is at index + 1 (snapshots are sorted newest first)
+                if (targetIndex < snapshots.length - 1) {
+                    baseSnapshotId = snapshots[targetIndex + 1].id;
+                } else {
+                    // This is the oldest snapshot - no previous snapshot to compare
+                    vscode.window.showInformationMessage('This is the oldest snapshot. No previous version to compare.');
+                    return;
+                }
             }
         } else if (!targetSnapshotId && targetFileUri && historyManager) {
             // Mode 2: Clicking on a file - show diff between current file and last approved/base
