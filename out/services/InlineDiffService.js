@@ -108,10 +108,18 @@ class InlineDiffService {
             ignoredChanges = existingState.ignoredChanges;
         }
         this.resourceState.set(uri.toString(), { originalUri: fileUri, snapshotId, baseSnapshotId, ignoredChanges });
-        // Notify change if already open (to refresh content with new snapshot)
+        // Open the document first (or bring to focus if already open)
+        const doc = await vscode.window.showTextDocument(uri, { preview: true });
+        // Notify change to force content refresh with new snapshot
         this._onDidChange.fire(uri);
-        // Open the document
-        await vscode.window.showTextDocument(uri, { preview: true });
+        // Force refresh decorations and code lenses after content update
+        setTimeout(() => {
+            const editor = vscode.window.visibleTextEditors.find(e => e.document.uri.toString() === uri.toString());
+            if (editor) {
+                this.updateDecorations(editor);
+            }
+            this._onDidChangeCodeLenses.fire();
+        }, 150);
     }
     getChangeSignature(change, type) {
         // Signature to identify a change block across re-renders
