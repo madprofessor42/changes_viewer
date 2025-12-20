@@ -407,9 +407,42 @@ class InlineDiffService {
     }
     // Removed toggleInlineDiff and restoreOriginalContent as we now use virtual documents
     clearSession(docUri) {
-        // Just remove from map
+        // Find all editors with this URI and clear their decorations
+        const editorsToUpdate = vscode.window.visibleTextEditors.filter(e => e.document.uri.toString() === docUri);
+        for (const editor of editorsToUpdate) {
+            // Clear all decorations
+            editor.setDecorations(this.addedDecorationType, []);
+            editor.setDecorations(this.deletedDecorationType, []);
+            editor.setDecorations(this.historicalDecorationType, []);
+        }
+        // Remove from map
         this.sessions.delete(docUri);
         this._onDidChangeCodeLenses.fire();
+    }
+    /**
+     * Close the diff viewer tab for the given virtual URI
+     */
+    async closeDiffViewerTab(virtualUri) {
+        try {
+            const virtualUriString = virtualUri.toString();
+            // Find and close the tab
+            for (const tabGroup of vscode.window.tabGroups.all) {
+                for (const tab of tabGroup.tabs) {
+                    // Check if this tab is our diff viewer
+                    if (tab.input instanceof vscode.TabInputText) {
+                        const tabUri = tab.input.uri;
+                        if (tabUri && tabUri.toString() === virtualUriString) {
+                            await vscode.window.tabGroups.close(tab);
+                            logger_1.Logger.getInstance().debug(`Closed diff viewer tab for ${virtualUriString}`);
+                            return;
+                        }
+                    }
+                }
+            }
+        }
+        catch (error) {
+            logger_1.Logger.getInstance().warn(`Failed to close diff viewer tab: ${error}`);
+        }
     }
     updateDecorations(editor) {
         const session = this.sessions.get(editor.document.uri.toString());
@@ -662,10 +695,9 @@ class InlineDiffService {
                 await (0, discardAllChangesCommand_1.discardAllChangesCommand)(this.historyManager, this.storageService, originalUri, { silent: true, skipRestore: true });
                 // Clear session as we are done
                 this.clearSession(virtualUri.toString());
-                // Close the diff editor if possible? 
-                // We can't easily close a specific editor tab via API without hacks, 
-                // but the content will update to show no changes or error.
-                // Since we deleted snapshots, the view might error out on next render if we don't clear.
+                // Close the diff viewer tab since all changes are reverted
+                await this.closeDiffViewerTab(virtualUri);
+                logger_1.Logger.getInstance().debug(`Closed diff viewer for ${originalUri.fsPath} after complete revert`);
             }
             else {
                 // Case 2: Not identical. Check if all remaining changes are approved (ignored).
@@ -692,6 +724,9 @@ class InlineDiffService {
                     await (0, approveAllChangesCommand_1.approveAllChangesCommand)(this.historyManager, this.storageService, originalUri, { silent: true });
                     // Clear session
                     this.clearSession(virtualUri.toString());
+                    // Close the diff viewer tab since all changes are approved
+                    await this.closeDiffViewerTab(virtualUri);
+                    logger_1.Logger.getInstance().debug(`Closed diff viewer for ${originalUri.fsPath} after approving all changes`);
                 }
             }
         }
