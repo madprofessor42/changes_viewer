@@ -236,7 +236,14 @@ function activate(context) {
         await (0, toggleInlineDiffCommand_1.toggleInlineDiffCommand)(inlineDiffService, snapshotId, fileUriString, historyManager, isSnapshotClick);
     });
     context.subscriptions.push(toggleInlineDiffCommandDisposable);
-    // Команды для CodeLens (approve/undo)
+    // Команды для CodeLens (approve/undo) - block-based
+    context.subscriptions.push(vscode.commands.registerCommand('changes-viewer.inline.approveBlock', async (uri, snapshotId, blockIndex) => {
+        await inlineDiffService.approveBlock(uri, snapshotId, blockIndex);
+    }));
+    context.subscriptions.push(vscode.commands.registerCommand('changes-viewer.inline.undoBlock', async (uri, snapshotId, blockIndex) => {
+        await inlineDiffService.undoBlock(uri, snapshotId, blockIndex);
+    }));
+    // Legacy commands for backward compatibility
     context.subscriptions.push(vscode.commands.registerCommand('changes-viewer.inline.approve', async (uri, snapshotId, change, type) => {
         await inlineDiffService.applyApprove(uri, snapshotId, change, type);
     }));

@@ -246,7 +246,22 @@ export function activate(context: vscode.ExtensionContext) {
     );
     context.subscriptions.push(toggleInlineDiffCommandDisposable);
 
-    // Команды для CodeLens (approve/undo)
+    // Команды для CodeLens (approve/undo) - block-based
+    context.subscriptions.push(vscode.commands.registerCommand(
+        'changes-viewer.inline.approveBlock',
+        async (uri: vscode.Uri, snapshotId: string, blockIndex: number) => {
+            await inlineDiffService.approveBlock(uri, snapshotId, blockIndex);
+        }
+    ));
+
+    context.subscriptions.push(vscode.commands.registerCommand(
+        'changes-viewer.inline.undoBlock',
+        async (uri: vscode.Uri, snapshotId: string, blockIndex: number) => {
+            await inlineDiffService.undoBlock(uri, snapshotId, blockIndex);
+        }
+    ));
+
+    // Legacy commands for backward compatibility
     context.subscriptions.push(vscode.commands.registerCommand(
         'changes-viewer.inline.approve',
         async (uri: vscode.Uri, snapshotId: string, change: any, type: 'added' | 'deleted') => {

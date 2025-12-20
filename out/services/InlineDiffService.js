@@ -185,34 +185,83 @@ class InlineDiffService {
             const lines1 = baseContent.split(/\r?\n/);
             const lines2 = newContent.split(/\r?\n/);
             const combinedLines = [];
+            const changeBlocks = [];
             let currentLineIdx = 0;
+            let currentBlockIndex = -1;
+            let lastChangeEndLine = -1; // Track where last change ended to detect consecutive changes
             for (const change of changes) {
+                // Add unchanged lines before this change
+                const unchangedStartIdx = combinedLines.length;
                 while (currentLineIdx < change.modifiedStart) {
                     combinedLines.push({ type: 'unchanged', content: lines2[currentLineIdx] });
                     currentLineIdx++;
                 }
+                // Determine if this change should start a new block or continue existing one
+                // A new block starts only if there was at least one NON-EMPTY unchanged line since the last change
+                // This allows grouping changes that are separated only by empty lines
+                const currentCombinedLineIdx = combinedLines.length;
+                let hasNonEmptyUnchangedBetween = false;
+                if (currentBlockIndex >= 0 && lastChangeEndLine < currentCombinedLineIdx) {
+                    // Check if any unchanged lines between lastChangeEndLine and currentCombinedLineIdx are non-empty
+                    for (let i = lastChangeEndLine; i < currentCombinedLineIdx; i++) {
+                        if (combinedLines[i] && combinedLines[i].type === 'unchanged' && combinedLines[i].content.trim() !== '') {
+                            hasNonEmptyUnchangedBetween = true;
+                            break;
+                        }
+                    }
+                }
+                const shouldStartNewBlock = currentBlockIndex === -1 || hasNonEmptyUnchangedBetween;
+                if (shouldStartNewBlock) {
+                    // Start a new block
+                    currentBlockIndex = changeBlocks.length;
+                    changeBlocks.push({
+                        startLine: currentCombinedLineIdx,
+                        endLine: currentCombinedLineIdx, // Will be updated
+                        changes: [change],
+                        hasDeleted: false,
+                        hasAdded: false
+                    });
+                }
+                else {
+                    // Continue existing block
+                    changeBlocks[currentBlockIndex].changes.push(change);
+                }
+                const currentBlock = changeBlocks[currentBlockIndex];
                 if (change.originalLength > 0) {
                     const sig = this.getChangeSignature(change, 'deleted');
                     const isIgnored = ignoredChanges.has(sig);
                     if (!isIgnored) {
+                        currentBlock.hasDeleted = true;
                         const deletedLines = change.originalContent;
                         for (const line of deletedLines) {
-                            combinedLines.push({ type: 'deleted', content: line, originalChange: change });
+                            combinedLines.push({
+                                type: 'deleted',
+                                content: line,
+                                originalChange: change,
+                                blockIndex: currentBlockIndex
+                            });
                         }
                     }
                 }
                 if (change.modifiedLength > 0) {
                     const sig = this.getChangeSignature(change, 'added');
                     const isIgnored = ignoredChanges.has(sig);
+                    if (!isIgnored) {
+                        currentBlock.hasAdded = true;
+                    }
                     for (let i = 0; i < change.modifiedLength; i++) {
                         combinedLines.push({
                             type: isIgnored ? 'unchanged' : 'added',
                             content: lines2[currentLineIdx],
-                            originalChange: isIgnored ? undefined : change
+                            originalChange: isIgnored ? undefined : change,
+                            blockIndex: isIgnored ? undefined : currentBlockIndex
                         });
                         currentLineIdx++;
                     }
                 }
+                // Update block end line and last change end
+                currentBlock.endLine = combinedLines.length - 1;
+                lastChangeEndLine = combinedLines.length;
             }
             while (currentLineIdx < lines2.length) {
                 combinedLines.push({ type: 'unchanged', content: lines2[currentLineIdx] });
@@ -223,6 +272,7 @@ class InlineDiffService {
                 snapshotId,
                 originalContent: baseContent,
                 lines: combinedLines,
+                changeBlocks: changeBlocks,
                 decorations: []
             };
             this.sessions.set(uri.toString(), session);
@@ -266,76 +316,130 @@ class InlineDiffService {
         editor.setDecorations(this.addedDecorationType, addedRanges);
         editor.setDecorations(this.deletedDecorationType, deletedRanges);
     }
-    // CodeLens Provider implementation (unchanged logic, just ensures it uses the session)
+    // CodeLens Provider implementation - one CodeLens per ChangeBlock (group of consecutive changes)
     provideCodeLenses(document, token) {
         const session = this.sessions.get(document.uri.toString());
         if (!session)
             return [];
         const lenses = [];
-        // We want to group consecutive lines of the same type and change into one CodeLens
-        let currentChange;
-        let currentType = 'unchanged';
-        let startLine = -1;
-        for (let i = 0; i < session.lines.length; i++) {
-            const line = session.lines[i];
-            // Check if we are starting a new block
-            const isDifferentChange = line.originalChange !== currentChange;
-            const isDifferentType = line.type !== currentType;
-            if (isDifferentChange || isDifferentType) {
-                // If we were tracking a block, emit CodeLens for it
-                if (currentChange && (currentType === 'added' || currentType === 'deleted')) {
-                    this.addCodeLensForBlock(lenses, document.uri, session.snapshotId, currentChange, currentType, startLine, i - 1);
-                }
-                // Start new block
-                currentChange = line.originalChange;
-                currentType = line.type;
-                startLine = i;
+        // Iterate through changeBlocks - each block gets one CodeLens
+        for (let blockIdx = 0; blockIdx < session.changeBlocks.length; blockIdx++) {
+            const block = session.changeBlocks[blockIdx];
+            // Skip empty blocks
+            if (block.changes.length === 0)
+                continue;
+            const range = new vscode.Range(block.startLine, 0, block.startLine, 0);
+            // Pass blockIndex instead of individual change
+            const args = [document.uri, session.snapshotId, blockIdx];
+            // Determine label based on what types of changes are in the block
+            let approveTitle = "$(check) Approve";
+            let undoTitle = "$(reply) Reject";
+            let approveTooltip = "Approve this change";
+            let undoTooltip = "Reject this change";
+            if (block.hasDeleted && block.hasAdded) {
+                approveTitle = "$(check) Approve Change";
+                undoTitle = "$(reply) Revert Change";
+                approveTooltip = "Approve modification";
+                undoTooltip = "Revert to original";
             }
-        }
-        // Handle last block
-        if (currentChange && (currentType === 'added' || currentType === 'deleted')) {
-            this.addCodeLensForBlock(lenses, document.uri, session.snapshotId, currentChange, currentType, startLine, session.lines.length - 1);
+            else if (block.hasDeleted) {
+                approveTitle = "$(check) Approve Deletion";
+                undoTitle = "$(reply) Restore";
+                approveTooltip = "Confirm deletion";
+                undoTooltip = "Restore this content";
+            }
+            else if (block.hasAdded) {
+                approveTitle = "$(check) Approve Addition";
+                undoTitle = "$(reply) Reject";
+                approveTooltip = "Keep this code";
+                undoTooltip = "Delete this code";
+            }
+            lenses.push(new vscode.CodeLens(range, {
+                title: approveTitle,
+                command: "changes-viewer.inline.approveBlock",
+                arguments: args,
+                tooltip: approveTooltip
+            }));
+            lenses.push(new vscode.CodeLens(range, {
+                title: undoTitle,
+                command: "changes-viewer.inline.undoBlock",
+                arguments: args,
+                tooltip: undoTooltip
+            }));
         }
         return lenses;
     }
-    addCodeLensForBlock(lenses, uri, snapshotId, change, type, startLine, endLine) {
-        const range = new vscode.Range(startLine, 0, startLine, 0);
-        const args = [uri, snapshotId, change, type];
-        if (type === 'deleted') {
-            // Deleted Block:
-            // "Approve" -> Confirm deletion (Remove from view) -> No action on file (already deleted)
-            // "Undo" -> Restore content -> Insert into original file
-            lenses.push(new vscode.CodeLens(range, {
-                title: "$(check) Approve Deletion",
-                command: "changes-viewer.inline.approve",
-                arguments: args,
-                tooltip: "Confirm deletion"
-            }));
-            lenses.push(new vscode.CodeLens(range, {
-                title: "$(reply) Restore",
-                command: "changes-viewer.inline.undo",
-                arguments: args,
-                tooltip: "Restore this content (undo deletion)"
-            }));
+    /**
+     * Apply action to an entire block of consecutive changes
+     */
+    async applyBlockAction(uri, snapshotId, blockIndex, action) {
+        // Retrieve state and session
+        const state = this.resourceState.get(uri.toString());
+        const session = this.sessions.get(uri.toString());
+        if (!state || !session) {
+            vscode.window.showErrorMessage("Could not determine session state (session expired)");
+            return;
         }
-        else {
-            // Added Block:
-            // "Approve" -> Keep addition -> No action on file (already added)
-            // "Undo" -> Reject addition -> Delete from original file
-            lenses.push(new vscode.CodeLens(range, {
-                title: "$(check) Approve Addition",
-                command: "changes-viewer.inline.approve",
-                arguments: args,
-                tooltip: "Keep this code"
-            }));
-            lenses.push(new vscode.CodeLens(range, {
-                title: "$(reply) Reject",
-                command: "changes-viewer.inline.undo",
-                arguments: args,
-                tooltip: "Delete this code (undo addition)"
-            }));
+        const originalFileUri = state.originalUri;
+        const block = session.changeBlocks[blockIndex];
+        if (!block) {
+            vscode.window.showErrorMessage("Change block not found");
+            return;
+        }
+        if (action === 'approve') {
+            // Mark all changes in the block as ignored
+            for (const change of block.changes) {
+                if (change.originalLength > 0) {
+                    const sig = this.getChangeSignature(change, 'deleted');
+                    state.ignoredChanges.add(sig);
+                }
+                if (change.modifiedLength > 0) {
+                    const sig = this.getChangeSignature(change, 'added');
+                    state.ignoredChanges.add(sig);
+                }
+            }
+            // Trigger re-render
+            this._onDidChange.fire(uri);
+            return;
+        }
+        // Undo action - need to revert changes in the original file
+        // Process changes in reverse order to maintain line positions
+        const workspaceEdit = new vscode.WorkspaceEdit();
+        // First, collect all the edits we need to make
+        // We need to handle them carefully to avoid position conflicts
+        // Sort changes by position in reverse order
+        const sortedChanges = [...block.changes].sort((a, b) => b.modifiedStart - a.modifiedStart);
+        for (const change of sortedChanges) {
+            if (change.modifiedLength > 0) {
+                // Delete added lines
+                const startPos = new vscode.Position(change.modifiedStart, 0);
+                const endPos = new vscode.Position(change.modifiedStart + change.modifiedLength, 0);
+                const range = new vscode.Range(startPos, endPos);
+                workspaceEdit.delete(originalFileUri, range);
+            }
+            if (change.originalLength > 0) {
+                // Restore deleted lines
+                const textToInsert = change.originalContent.join('\n') + '\n';
+                const position = new vscode.Position(change.modifiedStart, 0);
+                workspaceEdit.insert(originalFileUri, position, textToInsert);
+            }
+        }
+        // Apply edit to original file
+        if (workspaceEdit.size > 0) {
+            await vscode.workspace.applyEdit(workspaceEdit);
+            const doc = await vscode.workspace.openTextDocument(originalFileUri);
+            await doc.save();
+            this._onDidChange.fire(uri);
         }
     }
+    // Block-based adapters for new commands
+    async approveBlock(uri, snapshotId, blockIndex) {
+        await this.applyBlockAction(uri, snapshotId, blockIndex, 'approve');
+    }
+    async undoBlock(uri, snapshotId, blockIndex) {
+        await this.applyBlockAction(uri, snapshotId, blockIndex, 'undo');
+    }
+    // Legacy methods for backward compatibility (kept but may not be used)
     async applyAction(uri, snapshotId, change, type, action) {
         // Retrieve state to get original file URI
         const state = this.resourceState.get(uri.toString());
@@ -352,7 +456,7 @@ class InlineDiffService {
         const workspaceEdit = new vscode.WorkspaceEdit();
         if (type === 'deleted' && action === 'undo') {
             // Restore content
-            // We need to find WHERE to insert. 
+            // We need to find WHERE to insert.
             // change.modifiedStart is the index in the CURRENT file where the deletion happened.
             // So we insert at line change.modifiedStart.
             const textToInsert = change.originalContent.join('\n') + '\n';
