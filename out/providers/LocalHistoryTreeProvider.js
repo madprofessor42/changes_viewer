@@ -42,6 +42,8 @@ class LocalHistoryTreeProvider {
         this.historyManager = historyManager;
         this._onDidChangeTreeData = new vscode.EventEmitter();
         this.onDidChangeTreeData = this._onDidChangeTreeData.event;
+        // Состояние фильтра "показывать только непросмотренные/непринятые"
+        this.showOnlyUnapproved = false;
         // Следим за созданием новых снапшотов для обновления дерева
         historyManager.setOnSnapshotCreatedCallback(() => this.refresh());
         // Также обновляем при сохранении файлов
@@ -49,6 +51,13 @@ class LocalHistoryTreeProvider {
     }
     refresh() {
         this._onDidChangeTreeData.fire();
+    }
+    // Методы управления фильтром
+    toggleUnapprovedFilter() {
+        this.showOnlyUnapproved = !this.showOnlyUnapproved;
+    }
+    getUnapprovedFilter() {
+        return this.showOnlyUnapproved;
     }
     getTreeItem(element) {
         return element;
@@ -64,11 +73,18 @@ class LocalHistoryTreeProvider {
                 if (snapshots.length === 0) {
                     return [new HistoryTreeItem('No history', '', vscode.TreeItemCollapsibleState.None)];
                 }
-                return snapshots.map(snapshot => {
+                return snapshots.map((snapshot, index) => {
                     const relativeTime = (0, time_1.formatRelativeTime)(snapshot.timestamp);
                     let label = `${this.getSourceLabel(snapshot.source)} (${relativeTime})`;
                     if (snapshot.accepted) {
                         label = `Approved (${relativeTime})`;
+                    }
+                    else if (snapshot.discarded) {
+                        label = `Discarded (${relativeTime})`;
+                    }
+                    else if (snapshot.source === 'filesystem' && index === snapshots.length - 1) {
+                        // Check if it is the oldest snapshot and comes from filesystem
+                        label = `Base Snapshot (${relativeTime})`;
                     }
                     return new HistoryTreeItem(label, snapshot.id, vscode.TreeItemCollapsibleState.None, snapshot, this.getIconPath(snapshot), // Передаем snapshot целиком
                     element.fileUri // Передаем fileUri для контекста
@@ -86,7 +102,34 @@ class LocalHistoryTreeProvider {
             if (fileUris.length === 0) {
                 return [new HistoryTreeItem('No tracked files', '', vscode.TreeItemCollapsibleState.None)];
             }
-            return fileUris.map(fileUri => {
+            // Фильтрация файлов, если включен чекбокс showOnlyUnapproved
+            let filesToShow = fileUris;
+            if (this.showOnlyUnapproved) {
+                const unapprovedFiles = [];
+                for (const fileUri of fileUris) {
+                    const uri = vscode.Uri.parse(fileUri);
+                    const snapshots = await this.historyManager.getSnapshotsForFile(uri);
+                    // Файл считается "unapproved", если у него есть хотя бы один НЕ принятый снапшот.
+                    // НО: у нас логика, что при approve мы удаляем промежуточные снапшоты и оставляем один "approved".
+                    // Значит, если последний снапшот accepted, то файл "чистый" (заапрувлен).
+                    // Если последний снапшот !accepted (например, typing/save), то файл изменен.
+                    if (snapshots.length > 0) {
+                        // Берем самый свежий снапшот (первый в списке)
+                        const latestSnapshot = snapshots[0];
+                        if (!latestSnapshot.accepted) {
+                            unapprovedFiles.push(fileUri);
+                        }
+                    }
+                }
+                filesToShow = unapprovedFiles;
+            }
+            if (filesToShow.length === 0) {
+                if (this.showOnlyUnapproved) {
+                    return [new HistoryTreeItem('No unapproved files', '', vscode.TreeItemCollapsibleState.None)];
+                }
+                return [new HistoryTreeItem('No tracked files', '', vscode.TreeItemCollapsibleState.None)];
+            }
+            return filesToShow.map(fileUri => {
                 const uri = vscode.Uri.parse(fileUri);
                 const fileName = path.basename(uri.fsPath);
                 const filePath = uri.fsPath;
@@ -117,6 +160,9 @@ class LocalHistoryTreeProvider {
             const snapshot = sourceOrSnapshot;
             if (snapshot.accepted) {
                 return new vscode.ThemeIcon('check');
+            }
+            if (snapshot.discarded) {
+                return new vscode.ThemeIcon('discard');
             }
             return this.getIconPath(snapshot.source);
         }

@@ -3,6 +3,7 @@ import { LocalHistoryManager } from '../services/LocalHistoryManager';
 import { StorageService } from '../services/StorageService';
 import { Logger } from '../utils/logger';
 import { computeDiff } from '../utils/diff';
+import { Snapshot } from '../types/snapshot';
 
 /**
  * Command to approve (accept) all changes for a specific file.
@@ -59,6 +60,15 @@ export async function approveAllChangesCommand(
 
         const snapshotToKeep = unapprovedSnapshots[0]; // The newest unapproved snapshot
         const snapshotsToDelete = unapprovedSnapshots.slice(1); // All older unapproved snapshots to squash
+        let preservedBaseSnapshot: Snapshot | undefined;
+
+        // NEW LOGIC: If no previously approved snapshot, preserve the oldest one as base
+        if (lastApprovedIndex === -1 && snapshotsToDelete.length > 0) {
+             // The last one is the oldest
+             preservedBaseSnapshot = snapshotsToDelete[snapshotsToDelete.length - 1];
+             // Remove it from deletion list
+             snapshotsToDelete.pop();
+        }
         
         // 3. Confirm with user? (Implicitly requested by user: "Approve" button)
         // No confirmation dialog needed for now as it's an explicit action.
@@ -86,8 +96,10 @@ export async function approveAllChangesCommand(
             // or effectively be the "init" snapshot if no approved exists.
             let newDiffInfo = snapshotToKeep.diffInfo;
             
-            if (lastApprovedIndex !== -1) {
-                const lastApproved = snapshots[lastApprovedIndex];
+            // Determine the previous snapshot for diff calculation
+            const previousSnapshotForDiff = lastApprovedIndex !== -1 ? snapshots[lastApprovedIndex] : preservedBaseSnapshot;
+
+            if (previousSnapshotForDiff) {
                 try {
                     progress.report({ message: "Computing cumulative diff..." });
                     // Get content of snapshotToKeep
@@ -97,26 +109,23 @@ export async function approveAllChangesCommand(
                         snapshotToKeep.metadata
                     );
                     
-                    // Get content of lastApproved
-                    const contentApproved = await storageService.getSnapshotContent(
-                        lastApproved.contentPath,
-                        lastApproved.id,
-                        lastApproved.metadata
+                    // Get content of previous snapshot
+                    const contentPrevious = await storageService.getSnapshotContent(
+                        previousSnapshotForDiff.contentPath,
+                        previousSnapshotForDiff.id,
+                        previousSnapshotForDiff.metadata
                     );
 
-                    const calculatedDiff = computeDiff(contentApproved, contentToKeep);
+                    const calculatedDiff = computeDiff(contentPrevious, contentToKeep);
                     newDiffInfo = { 
                         ...calculatedDiff, 
-                        previousSnapshotId: lastApproved.id 
+                        previousSnapshotId: previousSnapshotForDiff.id 
                     };
                 } catch (error) {
                     logger.error('Failed to recompute diff during approve', error);
-                    // Keep original diffInfo or maybe undefined? 
-                    // Keeping original is probably safer than nothing, though it might be wrong (relative to deleted snapshot).
-                    // But if we deleted the previous snapshot, the original diffInfo referring to it is also invalid/dangling.
                 }
             } else {
-                // No approved snapshot existed. This becomes the baseline.
+                // No approved snapshot existed and no base preserved. This becomes the baseline.
                 // It has no previous snapshot.
                 newDiffInfo = undefined;
             }

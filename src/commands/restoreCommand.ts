@@ -4,6 +4,14 @@ import { LocalHistoryManager } from '../services/LocalHistoryManager';
 import { StorageService } from '../services/StorageService';
 import { Logger } from '../utils/logger';
 import { validateSnapshotId } from '../utils/validation';
+import { computeHash } from '../utils/hash';
+
+export interface RestoreOptions {
+    confirmMessage?: string;
+    confirmButtonLabel?: string;
+    skipBackup?: boolean;
+    skipConfirmation?: boolean;
+}
 
 /**
  * Команда для восстановления файла к версии из снапшота.
@@ -11,11 +19,13 @@ import { validateSnapshotId } from '../utils/validation';
  * @param historyManager Менеджер истории для работы со снапшотами
  * @param storageService Сервис хранилища для чтения содержимого снапшотов
  * @param snapshotId ID снапшота для восстановления
+ * @param options Опциональные параметры восстановления
  */
 export async function restoreCommand(
     historyManager: LocalHistoryManager,
     storageService: StorageService,
-    snapshotId?: string
+    snapshotId?: string,
+    options?: RestoreOptions
 ): Promise<void> {
     const logger = Logger.getInstance();
     
@@ -54,22 +64,27 @@ export async function restoreCommand(
         const fileUri = vscode.Uri.parse(snapshot.fileUri);
         
         // 3. Диалог подтверждения восстановления (ПЕРВЫЙ, согласно ТЗ UC-05)
-        const confirmChoice = await vscode.window.showWarningMessage(
-            `Restore file "${path.basename(snapshot.filePath)}" to this version? This will replace the current file content.`,
-            { modal: true },
-            'Restore',
-            'Cancel'
-        );
+        if (!options?.skipConfirmation) {
+            const message = options?.confirmMessage || `Restore file "${path.basename(snapshot.filePath)}" to this version? This will replace the current file content.`;
+            const buttonLabel = options?.confirmButtonLabel || 'Restore';
+            
+            const confirmChoice = await vscode.window.showWarningMessage(
+                message,
+                { modal: true },
+                buttonLabel,
+                'Cancel'
+            );
 
-        if (confirmChoice !== 'Restore') {
-            return; // Пользователь отменил операцию
+            if (confirmChoice !== buttonLabel) {
+                return; // Пользователь отменил операцию
+            }
         }
 
         // 4. Проверяем dirty state файла (если файл открыт)
         const openDocument = vscode.workspace.textDocuments.find(
             doc => doc.uri.toString() === snapshot.fileUri && !doc.isClosed
         );
-
+        
         if (openDocument && openDocument.isDirty) {
             // Файл открыт с несохраненными изменениями
             const choice = await vscode.window.showWarningMessage(
@@ -88,39 +103,40 @@ export async function restoreCommand(
                 // Сохраняем файл перед восстановлением
                 await openDocument.save();
                 
-                // Создаем снапшот для сохраненной версии
-                const savedContent = openDocument.getText();
-                await createBackupSnapshot(historyManager, fileUri, savedContent);
+                // Создаем снапшот для сохраненной версии (только если не пропускаем бекап)
+                if (!options?.skipBackup) {
+                    const savedContent = openDocument.getText();
+                    await createBackupSnapshot(historyManager, fileUri, savedContent);
+                }
             } else if (choice === 'Discard & Restore') {
                 // Отбрасываем несохраненные изменения
-                // Просто продолжаем восстановление - VS Code автоматически обновит редактор
-                // при записи нового содержимого на диск
             }
         }
 
-        // 5. Создаем снапшот текущей версии перед восстановлением (если файл существует)
-        try {
-            // Проверяем существование файла через VS Code API
+        // 5. Создаем снапшот текущей версии перед восстановлением (если файл существует и backup не пропущен)
+        if (!options?.skipBackup) {
             try {
-                await vscode.workspace.fs.stat(fileUri);
-                // Файл существует, читаем текущее содержимое
-                const fileData = await vscode.workspace.fs.readFile(fileUri);
-                const currentContent = Buffer.from(fileData).toString('utf8');
-                
-                // Создаем снапшот для текущей версии (source='manual')
-                await createBackupSnapshot(historyManager, fileUri, currentContent);
-            } catch (statError) {
-                // Файл не существует (FileNotFound) - это нормально, продолжаем восстановление
-                if (statError instanceof vscode.FileSystemError && statError.code === 'FileNotFound') {
-                    // Файл был удален, создадим его заново
-                } else {
-                    logger.warn(`Failed to read current file content before restore: ${statError instanceof Error ? statError.message : String(statError)}`);
-                    // Продолжаем восстановление, даже если не удалось создать снапшот
+                // Проверяем существование файла через VS Code API
+                try {
+                    await vscode.workspace.fs.stat(fileUri);
+                    // Файл существует, читаем текущее содержимое
+                    const fileData = await vscode.workspace.fs.readFile(fileUri);
+                    const currentContent = Buffer.from(fileData).toString('utf8');
+                    
+                    // Создаем снапшот для текущей версии (source='manual')
+                    await createBackupSnapshot(historyManager, fileUri, currentContent);
+                } catch (statError) {
+                    // Файл не существует (FileNotFound) - это нормально, продолжаем восстановление
+                    if (statError instanceof vscode.FileSystemError && statError.code === 'FileNotFound') {
+                        // Файл был удален, создадим его заново
+                    } else {
+                        logger.warn(`Failed to read current file content before restore: ${statError instanceof Error ? statError.message : String(statError)}`);
+                    }
                 }
+            } catch (error) {
+                logger.warn('Failed to create snapshot for current version before restore', error);
+                // Продолжаем восстановление
             }
-        } catch (error) {
-            logger.warn('Failed to create snapshot for current version before restore', error);
-            // Продолжаем восстановление
         }
 
         // 6. Читаем содержимое снапшота из StorageService
@@ -144,6 +160,13 @@ export async function restoreCommand(
         // 7. Записываем содержимое в файл на диск
         // UC-05 А4: Ошибка записи файла - показываем уведомление с деталями
         try {
+            // Если мы пропускаем backup, значит мы хотим избежать создания лишних снапшотов.
+            // Нужно сообщить LocalHistoryManager, чтобы он проигнорировал этот контент.
+            if (options?.skipBackup) {
+                const contentHash = await computeHash(snapshotContent);
+                historyManager.ignoreContentHash(contentHash);
+            }
+
             // Явно создаем директорию, если её нет (для случая, когда файл был удален)
             const fileDirUri = vscode.Uri.file(path.dirname(fileUri.fsPath));
             try {
@@ -177,10 +200,12 @@ export async function restoreCommand(
             // Файл восстановлен на диск, но не удалось открыть в редакторе
         }
 
-        // 9. Создаем новый снапшот для восстановленной версии (чтобы сохранить историю восстановления)
+        // 9. Создаем новый снапшот для восстановленной версии (только если не пропущен backup)
         // Примечание: LocalHistoryManager выполняет дедупликацию по contentHash,
         // но в случае восстановления содержимое обычно отличается от последнего снапшота
-        await createBackupSnapshot(historyManager, fileUri, snapshotContent, snapshot.id);
+        if (!options?.skipBackup) {
+            await createBackupSnapshot(historyManager, fileUri, snapshotContent, snapshot.id);
+        }
 
         // 10. Уведомление пользователя об успешном восстановлении
         const timestamp = new Date(snapshot.timestamp).toLocaleString();

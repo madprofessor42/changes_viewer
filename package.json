@@ -67,6 +67,42 @@
         "title": "Delete All Snapshots",
         "category": "Changes Viewer",
         "icon": "$(trash)"
+      },
+      {
+        "command": "changes-viewer.enableUnapprovedFilter",
+        "title": "Show Only Unapproved Files",
+        "category": "Changes Viewer",
+        "icon": "$(filter)"
+      },
+      {
+        "command": "changes-viewer.disableUnapprovedFilter",
+        "title": "Show All Files",
+        "category": "Changes Viewer",
+        "icon": "$(filter-filled)"
+      },
+      {
+        "command": "changes-viewer.deleteSnapshot",
+        "title": "Delete Snapshot",
+        "category": "Changes Viewer",
+        "icon": "$(trash)"
+      },
+      {
+        "command": "changes-viewer.deleteFileSnapshots",
+        "title": "Delete All Snapshots for File",
+        "category": "Changes Viewer",
+        "icon": "$(trash)"
+      },
+      {
+        "command": "changes-viewer.openFile",
+        "title": "Open File",
+        "category": "Changes Viewer",
+        "icon": "$(go-to-file)"
+      },
+      {
+        "command": "changes-viewer.discardAllChanges",
+        "title": "Discard All Changes (Revert to Stable)",
+        "category": "Changes Viewer",
+        "icon": "$(discard)"
       }
     ],
     "viewsContainers": {
@@ -89,6 +125,16 @@
     "menus": {
       "view/title": [
         {
+          "command": "changes-viewer.enableUnapprovedFilter",
+          "when": "view == changes-viewer-view && !changes-viewer.filterUnapprovedActive",
+          "group": "navigation"
+        },
+        {
+          "command": "changes-viewer.disableUnapprovedFilter",
+          "when": "view == changes-viewer-view && changes-viewer.filterUnapprovedActive",
+          "group": "navigation"
+        },
+        {
           "command": "changes-viewer.deleteAllSnapshots",
           "when": "view == changes-viewer-view",
           "group": "navigation"
@@ -96,12 +142,32 @@
       ],
       "view/item/context": [
         {
+          "command": "changes-viewer.openFile",
+          "when": "view == changes-viewer-view && viewItem == changes-viewer.fileItem",
+          "group": "inline"
+        },
+        {
+          "command": "changes-viewer.discardAllChanges",
+          "when": "view == changes-viewer-view && viewItem == changes-viewer.fileItem",
+          "group": "inline"
+        },
+        {
           "command": "changes-viewer.approveAllChanges",
           "when": "view == changes-viewer-view && viewItem == changes-viewer.fileItem",
           "group": "inline"
         },
         {
+          "command": "changes-viewer.deleteFileSnapshots",
+          "when": "view == changes-viewer-view && viewItem == changes-viewer.fileItem",
+          "group": "inline"
+        },
+        {
           "command": "changes-viewer.restore",
+          "when": "view == changes-viewer-view && viewItem == changes-viewer.snapshotItem",
+          "group": "inline"
+        },
+        {
+          "command": "changes-viewer.deleteSnapshot",
           "when": "view == changes-viewer-view && viewItem == changes-viewer.snapshotItem",
           "group": "inline"
         },

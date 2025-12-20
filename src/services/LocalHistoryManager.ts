@@ -18,6 +18,7 @@ export class LocalHistoryManager {
     private readonly configService: ConfigurationService;
     private onSnapshotCreatedCallback?: (snapshot: Snapshot) => void;
     private readonly logger: Logger;
+    private readonly ignoredContentHashes: Set<string> = new Set();
 
     constructor(
         storageService: StorageService,
@@ -41,6 +42,20 @@ export class LocalHistoryManager {
     }
 
     /**
+     * Игнорирует создание следующего снапшота с указанным хешем содержимого.
+     * Используется при восстановлении файлов, чтобы избежать создания дубликатов.
+     * 
+     * @param contentHash SHA-256 хеш содержимого
+     */
+    ignoreContentHash(contentHash: string): void {
+        this.ignoredContentHashes.add(contentHash);
+        // Очищаем через 5 секунд на всякий случай, если снапшот так и не был создан
+        setTimeout(() => {
+            this.ignoredContentHashes.delete(contentHash);
+        }, 5000);
+    }
+
+    /**
      * Создает новый снапшот для указанного файла.
      * Выполняет дедупликацию, вычисляет diff и проверяет лимиты после создания.
      * 
@@ -59,6 +74,22 @@ export class LocalHistoryManager {
         
         // 1. Вычисляем contentHash
         const contentHash = await computeHash(content);
+
+        // Проверяем, не нужно ли проигнорировать этот контент
+        if (this.ignoredContentHashes.has(contentHash)) {
+            this.logger.debug(`Snapshot creation skipped (ignored hash): ${contentHash} for file: ${fileUri.fsPath}`);
+            this.ignoredContentHashes.delete(contentHash);
+            
+            // Возвращаем последний снапшот как fallback, чтобы не ломать цепочку вызовов
+            const snapshots = await this.storageService.getSnapshotsForFile(fileUri.toString());
+            const lastSnapshot = snapshots[0];
+            if (lastSnapshot) {
+                return lastSnapshot;
+            }
+            // Если снапшотов нет, но мы игнорируем - это странно, но придется создать,
+            // или бросить ошибку, или вернуть фиктивный.
+            // Вернем "проигнорированный" как дубликат
+        }
         
         // 2. Проверяем дедупликацию
         const isDuplicate = await this.checkDeduplication(fileUri, contentHash);

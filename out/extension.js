@@ -51,6 +51,11 @@ const clearSnapshotsCommand_1 = require("./commands/clearSnapshotsCommand");
 const diffWithLastApprovedCommand_1 = require("./commands/diffWithLastApprovedCommand");
 const approveAllChangesCommand_1 = require("./commands/approveAllChangesCommand");
 const deleteAllSnapshotsCommand_1 = require("./commands/deleteAllSnapshotsCommand");
+const deleteSnapshotCommand_1 = require("./commands/deleteSnapshotCommand");
+const deleteFileSnapshotsCommand_1 = require("./commands/deleteFileSnapshotsCommand");
+const openFileCommand_1 = require("./commands/openFileCommand");
+const discardAllChangesCommand_1 = require("./commands/discardAllChangesCommand");
+const toggleUnapprovedFilterCommand_1 = require("./commands/toggleUnapprovedFilterCommand");
 const logger_1 = require("./utils/logger");
 /**
  * Активирует расширение Changes Viewer.
@@ -104,6 +109,8 @@ function activate(context) {
     context.subscriptions.push(changeTrackerDisposable);
     // --- UI: Регистрация Tree View Provider (вместо Timeline) ---
     const treeProvider = new LocalHistoryTreeProvider_1.LocalHistoryTreeProvider(historyManager);
+    // Инициализируем контекст фильтра (по умолчанию выключен)
+    vscode.commands.executeCommand('setContext', 'changes-viewer.filterUnapprovedActive', false);
     // Регистрируем провайдер для View ID из package.json
     const treeViewDisposable = vscode.window.registerTreeDataProvider('changes-viewer-view', treeProvider);
     context.subscriptions.push(treeViewDisposable);
@@ -179,12 +186,51 @@ function activate(context) {
         treeProvider.refresh(); // Обновляем дерево после очистки
     });
     context.subscriptions.push(clearSnapshotsCommandDisposable);
+    // Команды фильтрации (enable/disable для переключения иконки)
+    const enableFilterDisposable = vscode.commands.registerCommand('changes-viewer.enableUnapprovedFilter', async () => {
+        if (!treeProvider.getUnapprovedFilter()) {
+            await (0, toggleUnapprovedFilterCommand_1.toggleUnapprovedFilterCommand)(treeProvider);
+        }
+    });
+    context.subscriptions.push(enableFilterDisposable);
+    const disableFilterDisposable = vscode.commands.registerCommand('changes-viewer.disableUnapprovedFilter', async () => {
+        if (treeProvider.getUnapprovedFilter()) {
+            await (0, toggleUnapprovedFilterCommand_1.toggleUnapprovedFilterCommand)(treeProvider);
+        }
+    });
+    context.subscriptions.push(disableFilterDisposable);
     // Команда deleteAllSnapshots
     const deleteAllSnapshotsCommandDisposable = vscode.commands.registerCommand('changes-viewer.deleteAllSnapshots', async () => {
         await (0, deleteAllSnapshotsCommand_1.deleteAllSnapshotsCommand)(cleanupService);
         treeProvider.refresh();
     });
     context.subscriptions.push(deleteAllSnapshotsCommandDisposable);
+    // Команда deleteSnapshot
+    const deleteSnapshotCommandDisposable = vscode.commands.registerCommand('changes-viewer.deleteSnapshot', async (arg) => {
+        const snapshotId = getSnapshotId(arg);
+        await (0, deleteSnapshotCommand_1.deleteSnapshotCommand)(historyManager, snapshotId);
+        treeProvider.refresh();
+    });
+    context.subscriptions.push(deleteSnapshotCommandDisposable);
+    // Команда deleteFileSnapshots
+    const deleteFileSnapshotsCommandDisposable = vscode.commands.registerCommand('changes-viewer.deleteFileSnapshots', async (arg) => {
+        const fileUri = getFileUri(arg);
+        await (0, deleteFileSnapshotsCommand_1.deleteFileSnapshotsCommand)(historyManager, fileUri);
+        treeProvider.refresh();
+    });
+    context.subscriptions.push(deleteFileSnapshotsCommandDisposable);
+    // Команда openFile
+    const openFileCommandDisposable = vscode.commands.registerCommand('changes-viewer.openFile', async (arg) => {
+        const fileUri = getFileUri(arg);
+        await (0, openFileCommand_1.openFileCommand)(fileUri);
+    });
+    context.subscriptions.push(openFileCommandDisposable);
+    // Команда discardAllChanges
+    const discardAllChangesCommandDisposable = vscode.commands.registerCommand('changes-viewer.discardAllChanges', async (arg) => {
+        const fileUri = getFileUri(arg);
+        await (0, discardAllChangesCommand_1.discardAllChangesCommand)(historyManager, storageService, fileUri);
+    });
+    context.subscriptions.push(discardAllChangesCommandDisposable);
     logger.info('All commands registered');
     logger.info('Changes Viewer extension activated successfully!');
     // Подписываемся на изменения конфигурации для обновления Logger

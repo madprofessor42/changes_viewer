@@ -63,6 +63,8 @@ export interface Snapshot {
     accepted: boolean;
     /** Время принятия снапшота (если принят) */
     acceptedTimestamp?: number;
+    /** Отброшен ли снапшот (содержит отброшенные изменения) */
+    discarded?: boolean;
 }
 
 /**
