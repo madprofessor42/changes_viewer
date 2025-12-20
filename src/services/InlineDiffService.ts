@@ -272,40 +272,52 @@ export class InlineDiffService implements vscode.CodeLensProvider, vscode.TextDo
                 changeBlocks[currentBlockIndex].changes.push(change);
             }
 
+            // Check if this change is completely ignored
+            const deletedIgnored = change.originalLength > 0 ? ignoredChanges.has(this.getChangeSignature(change, 'deleted')) : true;
+            const addedIgnored = change.modifiedLength > 0 ? ignoredChanges.has(this.getChangeSignature(change, 'added')) : true;
+            const isCompletelyIgnored = deletedIgnored && addedIgnored;
+
+            // Skip completely ignored changes - don't add them to blocks
+            if (isCompletelyIgnored) {
+                // Still need to advance currentLineIdx for added lines
+                if (change.modifiedLength > 0) {
+                    for (let i = 0; i < change.modifiedLength; i++) {
+                        combinedLines.push({
+                            type: 'unchanged',
+                            content: lines2[currentLineIdx]
+                        });
+                        currentLineIdx++;
+                    }
+                }
+                continue;  // Skip to next change
+            }
+
             const currentBlock = changeBlocks[currentBlockIndex];
 
-            if (change.originalLength > 0) {
-                const sig = this.getChangeSignature(change, 'deleted');
-                const isIgnored = ignoredChanges.has(sig);
-                
-                if (!isIgnored) {
-                    currentBlock.hasDeleted = true;
-                    const deletedLines = change.originalContent;
-                    for (const line of deletedLines) {
-                        combinedLines.push({
-                            type: 'deleted',
-                            content: line,
-                            originalChange: change,
-                            blockIndex: currentBlockIndex
-                        });
-                    }
+            if (change.originalLength > 0 && !deletedIgnored) {
+                currentBlock.hasDeleted = true;
+                const deletedLines = change.originalContent;
+                for (const line of deletedLines) {
+                    combinedLines.push({
+                        type: 'deleted',
+                        content: line,
+                        originalChange: change,
+                        blockIndex: currentBlockIndex
+                    });
                 }
             }
 
             if (change.modifiedLength > 0) {
-                const sig = this.getChangeSignature(change, 'added');
-                const isIgnored = ignoredChanges.has(sig);
-
-                if (!isIgnored) {
+                if (!addedIgnored) {
                     currentBlock.hasAdded = true;
                 }
 
                 for (let i = 0; i < change.modifiedLength; i++) {
                     combinedLines.push({
-                        type: isIgnored ? 'unchanged' : 'added',
+                        type: addedIgnored ? 'unchanged' : 'added',
                         content: lines2[currentLineIdx],
-                        originalChange: isIgnored ? undefined : change,
-                        blockIndex: isIgnored ? undefined : currentBlockIndex
+                        originalChange: addedIgnored ? undefined : change,
+                        blockIndex: addedIgnored ? undefined : currentBlockIndex
                     });
                     currentLineIdx++;
                 }
@@ -349,6 +361,17 @@ export class InlineDiffService implements vscode.CodeLensProvider, vscode.TextDo
         }
     }
 
+    /**
+     * Force refresh decorations for all visible editors showing our virtual documents
+     */
+    public refreshAllDecorations(): void {
+        for (const editor of vscode.window.visibleTextEditors) {
+            if (editor.document.uri.scheme === 'changes-viewer') {
+                this.updateDecorations(editor);
+            }
+        }
+    }
+
     // Removed toggleInlineDiff and restoreOriginalContent as we now use virtual documents
 
     public clearSession(docUri: string) {
@@ -388,8 +411,9 @@ export class InlineDiffService implements vscode.CodeLensProvider, vscode.TextDo
         for (let blockIdx = 0; blockIdx < session.changeBlocks.length; blockIdx++) {
             const block = session.changeBlocks[blockIdx];
             
-            // Skip empty blocks
+            // Skip empty blocks or blocks with no active changes (all ignored)
             if (block.changes.length === 0) continue;
+            if (!block.hasDeleted && !block.hasAdded) continue;
 
             const range = new vscode.Range(block.startLine, 0, block.startLine, 0);
             // Pass blockIndex instead of individual change
@@ -469,8 +493,13 @@ export class InlineDiffService implements vscode.CodeLensProvider, vscode.TextDo
                 }
             }
             
-            // Trigger re-render
+            // Trigger re-render and refresh decorations
             this._onDidChange.fire(uri);
+            // Allow time for content to update, then refresh decorations
+            setTimeout(() => {
+                this.refreshAllDecorations();
+                this._onDidChangeCodeLenses.fire();
+            }, 150);
             return;
         }
 
@@ -507,6 +536,11 @@ export class InlineDiffService implements vscode.CodeLensProvider, vscode.TextDo
             await doc.save();
             
             this._onDidChange.fire(uri);
+            // Allow time for content to update, then refresh decorations
+            setTimeout(() => {
+                this.refreshAllDecorations();
+                this._onDidChangeCodeLenses.fire();
+            }, 150);
         }
     }
 
