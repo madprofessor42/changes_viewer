@@ -114,31 +114,11 @@ export async function restoreCommand(
             }
         }
 
-        // 5. Создаем снапшот текущей версии перед восстановлением (если файл существует и backup не пропущен)
-        if (!options?.skipBackup) {
-            try {
-                // Проверяем существование файла через VS Code API
-                try {
-                    await vscode.workspace.fs.stat(fileUri);
-                    // Файл существует, читаем текущее содержимое
-                    const fileData = await vscode.workspace.fs.readFile(fileUri);
-                    const currentContent = Buffer.from(fileData).toString('utf8');
-                    
-                    // Создаем снапшот для текущей версии (source='manual')
-                    await createBackupSnapshot(historyManager, fileUri, currentContent);
-                } catch (statError) {
-                    // Файл не существует (FileNotFound) - это нормально, продолжаем восстановление
-                    if (statError instanceof vscode.FileSystemError && statError.code === 'FileNotFound') {
-                        // Файл был удален, создадим его заново
-                    } else {
-                        logger.warn(`Failed to read current file content before restore: ${statError instanceof Error ? statError.message : String(statError)}`);
-                    }
-                }
-            } catch (error) {
-                logger.warn('Failed to create snapshot for current version before restore', error);
-                // Продолжаем восстановление
-            }
-        }
+        // 5. (Removed) We don't create an explicit backup of the current version before restore.
+        // If the user has unsaved changes, they were handled in step 4 (Save & Restore).
+        // If the file is clean, it corresponds to the latest snapshot (or close enough).
+        // We rely on VS Code's native Local History as a final safety net for the overwritten state
+        // to avoid polluting the timeline with "Backup" snapshots that the user considers "extra".
 
         // 6. Читаем содержимое снапшота из StorageService
         // UC-05 А3: Недоступное содержимое - показываем уведомление и логируем

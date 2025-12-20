@@ -19,6 +19,7 @@ export class LocalHistoryManager {
     private onChangeCallback?: () => void;
     private readonly logger: Logger;
     private readonly ignoredContentHashes: Set<string> = new Set();
+    private readonly pausedFiles: Set<string> = new Set();
 
     constructor(
         storageService: StorageService,
@@ -55,6 +56,39 @@ export class LocalHistoryManager {
     }
 
     /**
+     * Временно приостанавливает создание снапшотов для указанного файла.
+     * Используется при программном изменении файла (например, при восстановлении или отмене изменений).
+     * 
+     * @param fileUri URI файла
+     * @param durationMs Длительность паузы в мс (по умолчанию 2000)
+     */
+    pauseSnapshotCreation(fileUri: vscode.Uri, durationMs: number = 2000): void {
+        const uriString = fileUri.toString();
+        this.pausedFiles.add(uriString);
+        this.logger.debug(`Snapshot creation paused for file: ${fileUri.fsPath}`);
+        
+        setTimeout(() => {
+            if (this.pausedFiles.has(uriString)) {
+                this.pausedFiles.delete(uriString);
+                this.logger.debug(`Snapshot creation resumed (timeout) for file: ${fileUri.fsPath}`);
+            }
+        }, durationMs);
+    }
+
+    /**
+     * Возобновляет создание снапшотов для указанного файла.
+     * 
+     * @param fileUri URI файла
+     */
+    resumeSnapshotCreation(fileUri: vscode.Uri): void {
+        const uriString = fileUri.toString();
+        if (this.pausedFiles.has(uriString)) {
+            this.pausedFiles.delete(uriString);
+            this.logger.debug(`Snapshot creation resumed (manual) for file: ${fileUri.fsPath}`);
+        }
+    }
+
+    /**
      * Создает новый снапшот для указанного файла.
      * Выполняет дедупликацию, вычисляет diff и проверяет лимиты после создания.
      * 
@@ -71,6 +105,20 @@ export class LocalHistoryManager {
     ): Promise<Snapshot> {
         this.logger.debug(`Creating snapshot for file: ${fileUri.fsPath}, source: ${source}`);
         
+        // Проверяем, не приостановлено ли создание снапшотов для этого файла
+        if (this.pausedFiles.has(fileUri.toString())) {
+            this.logger.debug(`Snapshot creation skipped (paused) for file: ${fileUri.fsPath}`);
+            // Возвращаем последний снапшот как fallback
+            const snapshots = await this.storageService.getSnapshotsForFile(fileUri.toString());
+            const lastSnapshot = snapshots[0];
+            if (lastSnapshot) {
+                return lastSnapshot;
+            }
+            // Если снапшотов нет, придется вернуть фиктивный или бросить ошибку, 
+            // но DocumentWatcher обрабатывает ошибки, так что можно бросить
+            throw new Error('Snapshot creation is paused for this file');
+        }
+
         // 1. Вычисляем contentHash
         const contentHash = await computeHash(content);
 

@@ -75,15 +75,27 @@ async function toggleInlineDiffCommand(inlineDiffService, snapshotId, fileUriStr
         if (isSnapshotClick && targetSnapshotId && historyManager) {
             // Mode 1: Clicking on a snapshot - show diff between this snapshot and previous snapshot
             const snapshots = await historyManager.getSnapshotsForFile(targetFileUri);
-            // Find the index of the clicked snapshot
-            const clickedIndex = snapshots.findIndex(s => s.id === targetSnapshotId);
-            if (clickedIndex === -1) {
+            // Check if the clicked snapshot is a "Restored" snapshot
+            const clickedSnapshot = snapshots.find(s => s.id === targetSnapshotId);
+            if (clickedSnapshot?.metadata?.restoredFrom) {
+                // If it is restored, user likely wants to see the diff of the ORIGINAL snapshot
+                // to understand what state they returned to.
+                // Try to find the original snapshot in history
+                const originalSnapshot = snapshots.find(s => s.id === clickedSnapshot.metadata.restoredFrom);
+                if (originalSnapshot) {
+                    targetSnapshotId = originalSnapshot.id;
+                    // Note: We switch target to original, and then logic below will find ITS previous snapshot
+                }
+            }
+            // Find the index of the target snapshot (either clicked or redirected)
+            const targetIndex = snapshots.findIndex(s => s.id === targetSnapshotId);
+            if (targetIndex === -1) {
                 vscode.window.showErrorMessage('Snapshot not found in history.');
                 return;
             }
             // The previous snapshot is at index + 1 (snapshots are sorted newest first)
-            if (clickedIndex < snapshots.length - 1) {
-                baseSnapshotId = snapshots[clickedIndex + 1].id;
+            if (targetIndex < snapshots.length - 1) {
+                baseSnapshotId = snapshots[targetIndex + 1].id;
             }
             else {
                 // This is the oldest snapshot - no previous snapshot to compare

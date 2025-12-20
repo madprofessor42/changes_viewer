@@ -35,6 +35,8 @@ export interface SnapshotMetadata {
     created?: boolean;
     /** ID снапшота, из которого был восстановлен файл */
     restoredFrom?: string;
+    /** Список сигнатур обработанных (скрытых) изменений */
+    processedChanges?: string[];
 }
 
 /**

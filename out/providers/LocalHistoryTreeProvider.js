@@ -76,7 +76,7 @@ class LocalHistoryTreeProvider {
                 }
                 return snapshots.map((snapshot, index) => {
                     const relativeTime = (0, time_1.formatRelativeTime)(snapshot.timestamp);
-                    let label = `${this.getSourceLabel(snapshot.source)} (${relativeTime})`;
+                    let label = `${this.getSourceLabel(snapshot.source, snapshot.metadata)} (${relativeTime})`;
                     if (snapshot.accepted) {
                         label = `Approved (${relativeTime})`;
                     }
@@ -154,7 +154,10 @@ class LocalHistoryTreeProvider {
             return [new HistoryTreeItem('Error loading files', '', vscode.TreeItemCollapsibleState.None)];
         }
     }
-    getSourceLabel(source) {
+    getSourceLabel(source, metadata) {
+        if (metadata?.restoredFrom) {
+            return 'Restored';
+        }
         switch (source) {
             case 'typing': return 'Typing';
             case 'save': return 'Saved';
@@ -172,6 +175,10 @@ class LocalHistoryTreeProvider {
             }
             if (snapshot.discarded) {
                 return new vscode.ThemeIcon('discard');
+            }
+            // Check metadata for restored
+            if (snapshot.metadata?.restoredFrom) {
+                return new vscode.ThemeIcon('history'); // Or 'reply'
             }
             return this.getIconPath(snapshot.source);
         }

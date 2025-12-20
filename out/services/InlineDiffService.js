@@ -36,6 +36,7 @@ Object.defineProperty(exports, "__esModule", { value: true });
 exports.InlineDiffService = void 0;
 const vscode = __importStar(require("vscode"));
 const diff_1 = require("../utils/diff");
+const logger_1 = require("../utils/logger");
 class InlineDiffService {
     constructor(storageService, historyManager) {
         this.storageService = storageService;
@@ -150,6 +151,10 @@ class InlineDiffService {
                 if (!newSnapshot) {
                     return `Error: Snapshot ${snapshotId} not found`;
                 }
+                // Load processed changes from metadata
+                if (newSnapshot.metadata.processedChanges) {
+                    newSnapshot.metadata.processedChanges.forEach(sig => ignoredChanges.add(sig));
+                }
                 const newSnapshotContent = await this.storageService.getSnapshotContent(newSnapshot.contentPath, newSnapshot.id, newSnapshot.metadata);
                 if (newSnapshotContent === null) {
                     return 'Error: Failed to load snapshot content';
@@ -163,6 +168,10 @@ class InlineDiffService {
                 const snapshot = await this.historyManager.getSnapshot(snapshotId);
                 if (!snapshot) {
                     return `Error: Snapshot ${snapshotId} not found`;
+                }
+                // Load processed changes from metadata
+                if (snapshot.metadata.processedChanges) {
+                    snapshot.metadata.processedChanges.forEach(sig => ignoredChanges.add(sig));
                 }
                 const snapshotContent = await this.storageService.getSnapshotContent(snapshot.contentPath, snapshot.id, snapshot.metadata);
                 if (snapshotContent === null) {
@@ -341,8 +350,13 @@ class InlineDiffService {
     // CodeLens Provider implementation - one CodeLens per ChangeBlock (group of consecutive changes)
     provideCodeLenses(document, token) {
         const session = this.sessions.get(document.uri.toString());
+        const state = this.resourceState.get(document.uri.toString());
         if (!session)
             return [];
+        // Simplified: In Snapshot vs Snapshot mode (history view), do not show any actions (read-only diff).
+        if (state?.baseSnapshotId) {
+            return [];
+        }
         const lenses = [];
         // Iterate through changeBlocks - each block gets one CodeLens
         for (let blockIdx = 0; blockIdx < session.changeBlocks.length; blockIdx++) {
@@ -412,15 +426,35 @@ class InlineDiffService {
         }
         if (action === 'approve') {
             // Mark all changes in the block as ignored
+            const signatures = [];
             for (const change of block.changes) {
                 if (change.originalLength > 0) {
                     const sig = this.getChangeSignature(change, 'deleted');
                     state.ignoredChanges.add(sig);
+                    signatures.push(sig);
                 }
                 if (change.modifiedLength > 0) {
                     const sig = this.getChangeSignature(change, 'added');
                     state.ignoredChanges.add(sig);
+                    signatures.push(sig);
                 }
+            }
+            // Persist to snapshot metadata
+            try {
+                const snapshot = await this.historyManager.getSnapshot(snapshotId);
+                if (snapshot) {
+                    const existing = snapshot.metadata.processedChanges || [];
+                    const updated = Array.from(new Set([...existing, ...signatures]));
+                    await this.historyManager.updateSnapshot(snapshotId, {
+                        metadata: {
+                            ...snapshot.metadata,
+                            processedChanges: updated
+                        }
+                    });
+                }
+            }
+            catch (e) {
+                logger_1.Logger.getInstance().error("Failed to persist processed changes", e);
             }
             // Trigger re-render and refresh decorations
             this._onDidChange.fire(uri);
@@ -455,6 +489,8 @@ class InlineDiffService {
         }
         // Apply edit to original file
         if (workspaceEdit.size > 0) {
+            // Pause snapshot creation to prevent "revert" from creating a new snapshot
+            this.historyManager.pauseSnapshotCreation(originalFileUri, 3000);
             await vscode.workspace.applyEdit(workspaceEdit);
             const doc = await vscode.workspace.openTextDocument(originalFileUri);
             await doc.save();

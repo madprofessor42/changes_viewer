@@ -3,6 +3,8 @@ import { Snapshot } from '../types/snapshot';
 import { StorageService } from './StorageService';
 import { computeDetailedDiff, DiffChange } from '../utils/diff';
 import { LocalHistoryManager } from './LocalHistoryManager';
+import { computeHash } from '../utils/hash';
+import { Logger } from '../utils/logger';
 
 // A grouped block of consecutive changes (without unchanged lines between them)
 interface ChangeBlock {
@@ -179,6 +181,12 @@ export class InlineDiffService implements vscode.CodeLensProvider, vscode.TextDo
                 if (!newSnapshot) {
                     return `Error: Snapshot ${snapshotId} not found`;
                 }
+
+                // Load processed changes from metadata
+                if (newSnapshot.metadata.processedChanges) {
+                    newSnapshot.metadata.processedChanges.forEach(sig => ignoredChanges.add(sig));
+                }
+
                 const newSnapshotContent = await this.storageService.getSnapshotContent(
                     newSnapshot.contentPath,
                     newSnapshot.id,
@@ -197,6 +205,12 @@ export class InlineDiffService implements vscode.CodeLensProvider, vscode.TextDo
                 if (!snapshot) {
                     return `Error: Snapshot ${snapshotId} not found`;
                 }
+
+                // Load processed changes from metadata
+                if (snapshot.metadata.processedChanges) {
+                    snapshot.metadata.processedChanges.forEach(sig => ignoredChanges.add(sig));
+                }
+
                 const snapshotContent = await this.storageService.getSnapshotContent(
                     snapshot.contentPath,
                     snapshot.id,
@@ -333,7 +347,7 @@ export class InlineDiffService implements vscode.CodeLensProvider, vscode.TextDo
             currentLineIdx++;
         }
 
-        // Store session
+            // Store session
         const session: InlineDiffSession = {
             snapshotId,
             originalContent: baseContent,
@@ -403,7 +417,13 @@ export class InlineDiffService implements vscode.CodeLensProvider, vscode.TextDo
     // CodeLens Provider implementation - one CodeLens per ChangeBlock (group of consecutive changes)
     public provideCodeLenses(document: vscode.TextDocument, token: vscode.CancellationToken): vscode.CodeLens[] {
         const session = this.sessions.get(document.uri.toString());
+        const state = this.resourceState.get(document.uri.toString());
         if (!session) return [];
+
+        // Simplified: In Snapshot vs Snapshot mode (history view), do not show any actions (read-only diff).
+        if (state?.baseSnapshotId) {
+            return [];
+        }
 
         const lenses: vscode.CodeLens[] = [];
 
@@ -482,15 +502,35 @@ export class InlineDiffService implements vscode.CodeLensProvider, vscode.TextDo
 
         if (action === 'approve') {
             // Mark all changes in the block as ignored
+            const signatures: string[] = [];
             for (const change of block.changes) {
                 if (change.originalLength > 0) {
                     const sig = this.getChangeSignature(change, 'deleted');
                     state.ignoredChanges.add(sig);
+                    signatures.push(sig);
                 }
                 if (change.modifiedLength > 0) {
                     const sig = this.getChangeSignature(change, 'added');
                     state.ignoredChanges.add(sig);
+                    signatures.push(sig);
                 }
+            }
+            
+            // Persist to snapshot metadata
+            try {
+                const snapshot = await this.historyManager.getSnapshot(snapshotId);
+                if (snapshot) {
+                    const existing = snapshot.metadata.processedChanges || [];
+                    const updated = Array.from(new Set([...existing, ...signatures]));
+                    await this.historyManager.updateSnapshot(snapshotId, {
+                        metadata: {
+                            ...snapshot.metadata,
+                            processedChanges: updated
+                        }
+                    });
+                }
+            } catch (e) {
+                Logger.getInstance().error("Failed to persist processed changes", e);
             }
             
             // Trigger re-render and refresh decorations
@@ -531,6 +571,10 @@ export class InlineDiffService implements vscode.CodeLensProvider, vscode.TextDo
 
         // Apply edit to original file
         if (workspaceEdit.size > 0) {
+            
+            // Pause snapshot creation to prevent "revert" from creating a new snapshot
+            this.historyManager.pauseSnapshotCreation(originalFileUri, 3000);
+            
             await vscode.workspace.applyEdit(workspaceEdit);
             const doc = await vscode.workspace.openTextDocument(originalFileUri);
             await doc.save();

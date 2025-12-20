@@ -51,7 +51,7 @@ export class LocalHistoryTreeProvider implements vscode.TreeDataProvider<History
 
                 return snapshots.map((snapshot, index) => {
                     const relativeTime = formatRelativeTime(snapshot.timestamp);
-                    let label = `${this.getSourceLabel(snapshot.source)} (${relativeTime})`;
+                    let label = `${this.getSourceLabel(snapshot.source, snapshot.metadata)} (${relativeTime})`;
                     
                     if (snapshot.accepted) {
                         label = `Approved (${relativeTime})`;
@@ -150,7 +150,11 @@ export class LocalHistoryTreeProvider implements vscode.TreeDataProvider<History
         }
     }
 
-    private getSourceLabel(source: string): string {
+    private getSourceLabel(source: string, metadata?: any): string {
+        if (metadata?.restoredFrom) {
+            return 'Restored';
+        }
+
         switch (source) {
             case 'typing': return 'Typing';
             case 'save': return 'Saved';
@@ -169,6 +173,10 @@ export class LocalHistoryTreeProvider implements vscode.TreeDataProvider<History
             }
             if (snapshot.discarded) {
                 return new vscode.ThemeIcon('discard');
+            }
+            // Check metadata for restored
+            if (snapshot.metadata?.restoredFrom) {
+                return new vscode.ThemeIcon('history'); // Or 'reply'
             }
             return this.getIconPath(snapshot.source);
         }
