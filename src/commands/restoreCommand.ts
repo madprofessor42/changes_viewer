@@ -11,6 +11,7 @@ export interface RestoreOptions {
     confirmButtonLabel?: string;
     skipBackup?: boolean;
     skipConfirmation?: boolean;
+    ignoreUnsavedChanges?: boolean;
 }
 
 /**
@@ -85,7 +86,7 @@ export async function restoreCommand(
             doc => doc.uri.toString() === snapshot.fileUri && !doc.isClosed
         );
         
-        if (openDocument && openDocument.isDirty) {
+        if (openDocument && openDocument.isDirty && !options?.ignoreUnsavedChanges) {
             // Файл открыт с несохраненными изменениями
             const choice = await vscode.window.showWarningMessage(
                 `File "${path.basename(snapshot.filePath)}" has unsaved changes. Save them before restoring?`,

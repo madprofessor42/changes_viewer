@@ -16,7 +16,7 @@ export class LocalHistoryManager {
     private readonly storageService: StorageService;
     private readonly cleanupService: CleanupService;
     private readonly configService: ConfigurationService;
-    private onSnapshotCreatedCallback?: (snapshot: Snapshot) => void;
+    private onChangeCallback?: () => void;
     private readonly logger: Logger;
     private readonly ignoredContentHashes: Set<string> = new Set();
 
@@ -32,13 +32,12 @@ export class LocalHistoryManager {
     }
 
     /**
-     * Устанавливает callback для уведомлений о создании снапшотов.
-     * Используется для уведомления Timeline Provider об обновлениях.
+     * Устанавливает callback для уведомлений об изменениях истории (создание, обновление, удаление).
      * 
-     * @param callback Функция, которая будет вызвана после создания снапшота
+     * @param callback Функция, которая будет вызвана после изменения
      */
-    setOnSnapshotCreatedCallback(callback: (snapshot: Snapshot) => void): void {
-        this.onSnapshotCreatedCallback = callback;
+    setOnChangeCallback(callback: () => void): void {
+        this.onChangeCallback = callback;
     }
 
     /**
@@ -215,13 +214,13 @@ export class LocalHistoryManager {
             this.logger.error('Error during cleanup after snapshot creation', error);
         }
         
-        // 12. Уведомляем callback о создании снапшота (для Timeline Provider)
-        if (this.onSnapshotCreatedCallback) {
+        // 12. Уведомляем callback о создании снапшота
+        if (this.onChangeCallback) {
             try {
-                this.onSnapshotCreatedCallback(snapshot);
+                this.onChangeCallback();
             } catch (error) {
                 // Ошибка в callback не должна прерывать создание снапшота
-                this.logger.error('Error in onSnapshotCreatedCallback', error);
+                this.logger.error('Error in onChangeCallback', error);
             }
         }
         
@@ -342,13 +341,13 @@ export class LocalHistoryManager {
                 throw new Error(`Failed to save snapshot metadata: ${error instanceof Error ? error.message : String(error)}`);
             }
         
-            // Уведомляем callback об обновлении снапшота (для Timeline Provider)
-            if (this.onSnapshotCreatedCallback) {
+            // Уведомляем callback об обновлении снапшота
+            if (this.onChangeCallback) {
                 try {
-                    this.onSnapshotCreatedCallback(updatedSnapshot);
+                    this.onChangeCallback();
                 } catch (error) {
                     // Ошибка в callback не должна прерывать обновление снапшота
-                    this.logger.error('Error in onSnapshotCreatedCallback (update)', error);
+                    this.logger.error('Error in onChangeCallback (update)', error);
                 }
             }
             
@@ -369,9 +368,10 @@ export class LocalHistoryManager {
      * Удаляет снапшот по ID.
      * 
      * @param snapshotId ID снапшота
+     * @param skipCallback Опционально: пропустить вызов callback (для пакетного удаления)
      * @throws Error если снапшот не найден или произошла ошибка удаления
      */
-    async deleteSnapshot(snapshotId: string): Promise<void> {
+    async deleteSnapshot(snapshotId: string, skipCallback: boolean = false): Promise<void> {
         this.logger.debug(`Deleting snapshot: ${snapshotId}`);
         
         const snapshot = await this.storageService.getSnapshotMetadata(snapshotId);
@@ -412,6 +412,15 @@ export class LocalHistoryManager {
         await this.storageService.updateStorageIndex(index);
         
         this.logger.info(`Snapshot deleted: ${snapshotId} for file: ${snapshot.filePath}`);
+
+        // Уведомляем callback об удалении снапшота
+        if (!skipCallback && this.onChangeCallback) {
+            try {
+                this.onChangeCallback();
+            } catch (error) {
+                this.logger.error('Error in onChangeCallback (delete)', error);
+            }
+        }
     }
 
     /**
@@ -425,13 +434,22 @@ export class LocalHistoryManager {
         
         for (const snapshotId of snapshotIds) {
             try {
-                await this.deleteSnapshot(snapshotId);
+                await this.deleteSnapshot(snapshotId, true); // Пропускаем callback для каждого удаления
             } catch (error) {
                 errors.push(`Failed to delete snapshot ${snapshotId}: ${error instanceof Error ? error.message : String(error)}`);
                 this.logger.error(`Failed to delete snapshot ${snapshotId}`, error);
             }
         }
         
+        // Вызываем callback один раз после всех удалений
+        if (this.onChangeCallback) {
+            try {
+                this.onChangeCallback();
+            } catch (error) {
+                this.logger.error('Error in onChangeCallback (deleteSnapshots)', error);
+            }
+        }
+
         if (errors.length > 0) {
             throw new Error(`Failed to delete some snapshots:\n${errors.join('\n')}`);
         }

@@ -99,9 +99,9 @@ export function activate(context: vscode.ExtensionContext) {
     );
     context.subscriptions.push(treeViewDisposable);
 
-    // Устанавливаем callback для уведомления Tree Provider о создании снапшотов
-    historyManager.setOnSnapshotCreatedCallback((snapshot) => {
-        // Просто обновляем дерево, если снапшот относится к текущему файлу
+    // Устанавливаем callback для уведомления Tree Provider об изменениях
+    historyManager.setOnChangeCallback(() => {
+        // Просто обновляем дерево
         treeProvider.refresh();
     });
     

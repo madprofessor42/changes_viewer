@@ -114,9 +114,9 @@ function activate(context) {
     // Регистрируем провайдер для View ID из package.json
     const treeViewDisposable = vscode.window.registerTreeDataProvider('changes-viewer-view', treeProvider);
     context.subscriptions.push(treeViewDisposable);
-    // Устанавливаем callback для уведомления Tree Provider о создании снапшотов
-    historyManager.setOnSnapshotCreatedCallback((snapshot) => {
-        // Просто обновляем дерево, если снапшот относится к текущему файлу
+    // Устанавливаем callback для уведомления Tree Provider об изменениях
+    historyManager.setOnChangeCallback(() => {
+        // Просто обновляем дерево
         treeProvider.refresh();
     });
     logger.info('Tree View Provider: registered successfully');

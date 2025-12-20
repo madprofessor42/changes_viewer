@@ -70,15 +70,15 @@
       },
       {
         "command": "changes-viewer.enableUnapprovedFilter",
-        "title": "Show Only Unapproved Files",
+        "title": "Show Only Unapproved Files (Hide Approved)",
         "category": "Changes Viewer",
-        "icon": "$(filter)"
+        "icon": "$(eye)"
       },
       {
         "command": "changes-viewer.disableUnapprovedFilter",
         "title": "Show All Files",
         "category": "Changes Viewer",
-        "icon": "$(filter-filled)"
+        "icon": "$(eye-closed)"
       },
       {
         "command": "changes-viewer.deleteSnapshot",

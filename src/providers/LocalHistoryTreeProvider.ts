@@ -9,11 +9,12 @@ export class LocalHistoryTreeProvider implements vscode.TreeDataProvider<History
     readonly onDidChangeTreeData: vscode.Event<HistoryTreeItem | undefined | void> = this._onDidChangeTreeData.event;
     
     // Состояние фильтра "показывать только непросмотренные/непринятые"
+    // По умолчанию false - показываем все файлы
     private showOnlyUnapproved: boolean = false;
 
     constructor(private historyManager: LocalHistoryManager) {
-        // Следим за созданием новых снапшотов для обновления дерева
-        historyManager.setOnSnapshotCreatedCallback(() => this.refresh());
+        // Следим за изменениями истории для обновления дерева
+        historyManager.setOnChangeCallback(() => this.refresh());
         // Также обновляем при сохранении файлов
         vscode.workspace.onDidSaveTextDocument(() => this.refresh());
     }
@@ -85,6 +86,17 @@ export class LocalHistoryTreeProvider implements vscode.TreeDataProvider<History
             }
             
             // Фильтрация файлов, если включен чекбокс showOnlyUnapproved
+            // Логика UI:
+            // "Глазик" (eye) означает режим просмотра "ВСЕХ" файлов. (showOnlyUnapproved = false)
+            // "Закрытый глазик" (eye-closed) означает режим "Скрыть утвержденные", т.е. показать только НЕ утвержденные. (showOnlyUnapproved = true)
+            
+            // Если showOnlyUnapproved = true (глазик закрыт), показываем только Unapproved.
+            // Если showOnlyUnapproved = false (глазик открыт), показываем ВСЕ.
+            
+            // В VS Code команда enableUnapprovedFilter (icon: eye-closed) активна, когда context !filterUnapprovedActive
+            // То есть, когда мы видим "eye-closed" в меню, это кнопка "Включить фильтр (скрыть утвержденные)".
+            // После нажатия context становится true, и появляется кнопка disableUnapprovedFilter (icon: eye) - "Показать все".
+            
             let filesToShow = fileUris;
             
             if (this.showOnlyUnapproved) {

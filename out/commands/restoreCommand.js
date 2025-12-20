@@ -87,7 +87,7 @@ async function restoreCommand(historyManager, storageService, snapshotId, option
         }
         // 4. Проверяем dirty state файла (если файл открыт)
         const openDocument = vscode.workspace.textDocuments.find(doc => doc.uri.toString() === snapshot.fileUri && !doc.isClosed);
-        if (openDocument && openDocument.isDirty) {
+        if (openDocument && openDocument.isDirty && !options?.ignoreUnsavedChanges) {
             // Файл открыт с несохраненными изменениями
             const choice = await vscode.window.showWarningMessage(`File "${path.basename(snapshot.filePath)}" has unsaved changes. Save them before restoring?`, { modal: true }, 'Save & Restore', 'Discard & Restore', 'Cancel');
             if (choice === 'Cancel') {

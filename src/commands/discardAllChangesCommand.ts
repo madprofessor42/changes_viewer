@@ -3,11 +3,10 @@ import { LocalHistoryManager } from '../services/LocalHistoryManager';
 import { StorageService } from '../services/StorageService';
 import { restoreCommand } from './restoreCommand';
 import { Logger } from '../utils/logger';
-import { computeDiff } from '../utils/diff';
 
 /**
  * Command to discard all changes for a file, reverting to the last accepted snapshot (or base).
- * This squashes all intermediate changes into a single "discarded" snapshot and reverts the file.
+ * This deletes all intermediate snapshots and reverts the file.
  * 
  * @param historyManager Local history manager
  * @param storageService Storage service
@@ -34,34 +33,30 @@ export async function discardAllChangesCommand(
             return;
         }
 
-        // 2. Identify snapshots
-        // Find the latest accepted snapshot
-        const lastAcceptedIndex = snapshots.findIndex(s => s.accepted);
-        const lastAcceptedSnapshot = lastAcceptedIndex !== -1 ? snapshots[lastAcceptedIndex] : undefined;
-        
-        // Target snapshot to revert to (last accepted or oldest/base)
-        // snapshots are sorted by timestamp desc (newest first), so oldest is last
-        const targetSnapshot = lastAcceptedSnapshot || snapshots[snapshots.length - 1];
-        
-        // Unapproved snapshots to squash (all snapshots BEFORE the target)
-        // Since sorted Newest -> Oldest, these are snapshots with index < targetIndex
-        const targetIndex = lastAcceptedIndex !== -1 ? lastAcceptedIndex : snapshots.length - 1;
-        const unapprovedSnapshots = snapshots.slice(0, targetIndex);
+        // 2. Identify target snapshot (last stable: accepted or base/oldest)
+        // Snapshots are sorted by timestamp desc (newest first).
+        const lastAcceptedSnapshot = snapshots.find(s => s.accepted);
+        const targetSnapshot = lastAcceptedSnapshot || snapshots[snapshots.length - 1]; // Fallback to base (oldest)
 
-        if (unapprovedSnapshots.length === 0) {
-            // Check if current file content differs from target
-             // If file matches target, nothing to discard?
-             // But we might have unsaved changes in editor.
-             // restoreCommand handles dirty editor check.
+        // 3. Identify snapshots to delete (all intermediate snapshots newer than target)
+        // Since snapshots are sorted desc, these are all snapshots BEFORE target in the array.
+        const targetIndex = snapshots.findIndex(s => s.id === targetSnapshot.id);
+        if (targetIndex === -1) {
+             // Should not happen as we picked it from array
+             logger.error('Target snapshot not found in list');
+             return;
         }
 
+        const snapshotsToDelete = snapshots.slice(0, targetIndex);
+        
         const isApproved = !!lastAcceptedSnapshot;
         const versionLabel = isApproved ? 'last approved version' : 'base version';
         const timestamp = new Date(targetSnapshot.timestamp).toLocaleString();
+        const deletedCountText = snapshotsToDelete.length > 0 ? ` and delete ${snapshotsToDelete.length} intermediate snapshot(s)` : '';
 
-        // 3. Confirm with user FIRST (before modifying history)
+        // 4. Confirm with user
         const choice = await vscode.window.showWarningMessage(
-            `Discard all changes for "${vscode.workspace.asRelativePath(fileUri)}"?\n\nThis will revert the file to the ${versionLabel} (${timestamp}) and move current changes to 'Discarded' state.`,
+            `Discard all changes for "${vscode.workspace.asRelativePath(fileUri)}"?\n\nThis will revert the file to the ${versionLabel} (${timestamp})${deletedCountText}.`,
             { modal: true },
             'Discard Changes',
             'Cancel'
@@ -77,78 +72,20 @@ export async function discardAllChangesCommand(
             cancellable: false
         }, async (progress) => {
 
-            // 4. Handle "Discarded" snapshot logic
-            if (unapprovedSnapshots.length > 0) {
-                const snapshotToKeep = unapprovedSnapshots[0]; // Newest unapproved
-                const snapshotsToDelete = unapprovedSnapshots.slice(1); // Intermediates
-
-                // Delete intermediate snapshots
-                if (snapshotsToDelete.length > 0) {
-                    progress.report({ message: "Squashing intermediate snapshots..." });
-                    const idsToDelete = snapshotsToDelete.map(s => s.id);
-                    try {
-                        await historyManager.deleteSnapshots(idsToDelete);
-                    } catch (error) {
-                        logger.error('Failed to delete intermediate snapshots during discard', error);
-                    }
-                }
-
-                // Update the kept snapshot to be "Discarded"
-                progress.report({ message: "Marking changes as discarded..." });
+            // 5. Delete intermediate snapshots
+            if (snapshotsToDelete.length > 0) {
+                progress.report({ message: "Deleting intermediate snapshots..." });
+                const idsToDelete = snapshotsToDelete.map(s => s.id);
                 try {
-                    // Recompute diff against target (Last Approved)
-                    // This is similar to approve logic: diff(LastApproved, Discarded)
-                    let newDiffInfo = snapshotToKeep.diffInfo;
-                    
-                    try {
-                         const contentDiscarded = await storageService.getSnapshotContent(
-                            snapshotToKeep.contentPath, 
-                            snapshotToKeep.id, 
-                            snapshotToKeep.metadata
-                        );
-                        
-                        const contentTarget = await storageService.getSnapshotContent(
-                            targetSnapshot.contentPath,
-                            targetSnapshot.id,
-                            targetSnapshot.metadata
-                        );
-
-                        const calculatedDiff = computeDiff(contentTarget, contentDiscarded);
-                        newDiffInfo = { 
-                            ...calculatedDiff, 
-                            previousSnapshotId: targetSnapshot.id 
-                        };
-                    } catch (error) {
-                        logger.warn('Failed to recompute diff for discarded snapshot', error);
-                    }
-
-                    await historyManager.updateSnapshot(snapshotToKeep.id, {
-                        discarded: true,
-                        accepted: false, // Ensure it's not accepted
-                        diffInfo: newDiffInfo,
-                        source: 'manual' // Maybe mark as manual to indicate explicit user action?
-                    });
+                    await historyManager.deleteSnapshots(idsToDelete);
                 } catch (error) {
-                    logger.error(`Failed to update discarded snapshot ${snapshotToKeep.id}`, error);
+                    logger.error('Failed to delete intermediate snapshots during discard', error);
+                    // We continue with restore even if some deletions failed, 
+                    // as the user intent is to revert.
                 }
-            } else {
-                // If no unapproved snapshots exist (e.g. we edited file but haven't saved/debounced yet),
-                // we might want to create a snapshot of current state as "Discarded".
-                // restoreCommand usually does backup, but we want to mark it as discarded.
-                
-                // Let's create a snapshot manually if needed.
-                // But for now, if there are no snapshots to squash, we assume there are no significant tracked changes to "save as discarded".
-                // If the user has unsaved changes in editor, `restoreCommand` asks to Save or Discard.
-                // If they Save, a snapshot is created.
-                // If they Discard, changes are lost.
-                
-                // If we want to capture "Unsaved" changes as "Discarded" history, we would need to force save or read from editor.
-                // But typically "Discard Changes" implies reverting to disk state.
-                
-                // Let's stick to handling existing snapshots.
             }
 
-            // 5. Restore file content
+            // 6. Restore file content
             progress.report({ message: "Restoring file..." });
             
             await restoreCommand(
@@ -157,7 +94,8 @@ export async function discardAllChangesCommand(
                 targetSnapshot.id,
                 {
                     skipConfirmation: true,
-                    skipBackup: true // We already handled history by squashing into "Discarded"
+                    skipBackup: true, // Do not create a backup of the discarded state
+                    ignoreUnsavedChanges: true // Discard unsaved changes in editor too
                 }
             );
         });
