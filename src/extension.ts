@@ -291,7 +291,7 @@ export function activate(context: vscode.ExtensionContext) {
         'changes-viewer.approveAllChanges',
         async (arg?: any) => {
             const fileUri = getFileUri(arg);
-            await approveAllChangesCommand(historyManager, storageService, fileUri);
+            await approveAllChangesCommand(historyManager, storageService, fileUri, undefined, inlineDiffService);
             treeProvider.refresh();
         }
     );

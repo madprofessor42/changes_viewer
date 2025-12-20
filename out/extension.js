@@ -259,7 +259,7 @@ function activate(context) {
     // Команда approveAllChanges
     const approveAllChangesCommandDisposable = vscode.commands.registerCommand('changes-viewer.approveAllChanges', async (arg) => {
         const fileUri = getFileUri(arg);
-        await (0, approveAllChangesCommand_1.approveAllChangesCommand)(historyManager, storageService, fileUri);
+        await (0, approveAllChangesCommand_1.approveAllChangesCommand)(historyManager, storageService, fileUri, undefined, inlineDiffService);
         treeProvider.refresh();
     });
     context.subscriptions.push(approveAllChangesCommandDisposable);

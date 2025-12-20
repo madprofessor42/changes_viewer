@@ -4,6 +4,7 @@ import { StorageService } from '../services/StorageService';
 import { Logger } from '../utils/logger';
 import { computeDiff } from '../utils/diff';
 import { Snapshot } from '../types/snapshot';
+import { InlineDiffService } from '../services/InlineDiffService';
 
 export interface ApproveAllOptions {
     silent?: boolean;
@@ -18,12 +19,14 @@ export interface ApproveAllOptions {
  * @param storageService Storage service
  * @param fileUri URI of the file to approve
  * @param options Optional parameters
+ * @param inlineDiffService Optional InlineDiffService to update active diff views
  */
 export async function approveAllChangesCommand(
     historyManager: LocalHistoryManager,
     storageService: StorageService,
     fileUri?: vscode.Uri,
-    options?: ApproveAllOptions
+    options?: ApproveAllOptions,
+    inlineDiffService?: InlineDiffService
 ): Promise<void> {
     const logger = Logger.getInstance();
 
@@ -150,6 +153,14 @@ export async function approveAllChangesCommand(
                     vscode.window.showInformationMessage('Changes approved and squashed successfully.');
                 }
                 logger.info(`Approved and squashed snapshots for ${fileUri.fsPath}. Kept: ${snapshotToKeep.id}`);
+
+                // 7. Update InlineDiffService if provided
+                if (inlineDiffService) {
+                    // Update the active diff session to use the new approved snapshot as base
+                    // This will refresh the view and should show no differences (since current content == approved snapshot)
+                    await inlineDiffService.openInlineDiffDocument(fileUri, snapshotToKeep.id);
+                }
+
             } catch (error) {
                 logger.error(`Failed to update snapshot ${snapshotToKeep.id}`, error);
                 if (!options?.silent) {
