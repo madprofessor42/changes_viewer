@@ -50,6 +50,23 @@
         "command": "changes-viewer.clearSnapshots",
         "title": "Clear Old Snapshots",
         "category": "Changes Viewer"
+      },
+      {
+        "command": "changes-viewer.diffWithLastApproved",
+        "title": "Show Changes Since Last Approve",
+        "category": "Changes Viewer"
+      },
+      {
+        "command": "changes-viewer.approveAllChanges",
+        "title": "Approve All Changes",
+        "category": "Changes Viewer",
+        "icon": "$(check-all)"
+      },
+      {
+        "command": "changes-viewer.deleteAllSnapshots",
+        "title": "Delete All Snapshots",
+        "category": "Changes Viewer",
+        "icon": "$(trash)"
       }
     ],
     "viewsContainers": {
@@ -70,19 +87,31 @@
       ]
     },
     "menus": {
+      "view/title": [
+        {
+          "command": "changes-viewer.deleteAllSnapshots",
+          "when": "view == changes-viewer-view",
+          "group": "navigation"
+        }
+      ],
       "view/item/context": [
+        {
+          "command": "changes-viewer.approveAllChanges",
+          "when": "view == changes-viewer-view && viewItem == changes-viewer.fileItem",
+          "group": "inline"
+        },
         {
           "command": "changes-viewer.restore",
           "when": "view == changes-viewer-view && viewItem == changes-viewer.snapshotItem",
           "group": "inline"
         },
         {
-          "command": "changes-viewer.diff",
+          "command": "changes-viewer.showDetails",
           "when": "view == changes-viewer-view && viewItem == changes-viewer.snapshotItem",
           "group": "inline"
         },
         {
-          "command": "changes-viewer.showDetails",
+          "command": "changes-viewer.diff",
           "when": "view == changes-viewer-view && viewItem == changes-viewer.snapshotItem",
           "group": "1_actions"
         },

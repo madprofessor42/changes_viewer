@@ -11,6 +11,9 @@ import { acceptCommand } from './commands/acceptCommand';
 import { diffCommand } from './commands/diffCommand';
 import { showDetailsCommand } from './commands/showDetailsCommand';
 import { clearSnapshotsCommand } from './commands/clearSnapshotsCommand';
+import { diffWithLastApprovedCommand } from './commands/diffWithLastApprovedCommand';
+import { approveAllChangesCommand } from './commands/approveAllChangesCommand';
+import { deleteAllSnapshotsCommand } from './commands/deleteAllSnapshotsCommand';
 import { Logger } from './utils/logger';
 
 /**
@@ -106,6 +109,15 @@ export function activate(context: vscode.ExtensionContext) {
         return undefined;
     };
 
+    // Вспомогательная функция для извлечения URI файла из аргументов команды
+    const getFileUri = (arg: any): vscode.Uri | undefined => {
+        if (arg instanceof vscode.Uri) return arg;
+        if (arg instanceof HistoryTreeItem && arg.fileUri) return vscode.Uri.parse(arg.fileUri);
+        // Если команда вызвана из редактора
+        if (!arg && vscode.window.activeTextEditor) return vscode.window.activeTextEditor.document.uri;
+        return undefined;
+    };
+
     // Команда restore
     const restoreCommandDisposable = vscode.commands.registerCommand(
         'changes-viewer.restore',
@@ -137,6 +149,27 @@ export function activate(context: vscode.ExtensionContext) {
         }
     );
     context.subscriptions.push(diffCommandDisposable);
+
+    // Команда diffWithLastApproved
+    const diffWithLastApprovedCommandDisposable = vscode.commands.registerCommand(
+        'changes-viewer.diffWithLastApproved',
+        async (arg?: any) => {
+            const fileUri = getFileUri(arg);
+            await diffWithLastApprovedCommand(historyManager, storageService, fileUri);
+        }
+    );
+    context.subscriptions.push(diffWithLastApprovedCommandDisposable);
+
+    // Команда approveAllChanges
+    const approveAllChangesCommandDisposable = vscode.commands.registerCommand(
+        'changes-viewer.approveAllChanges',
+        async (arg?: any) => {
+            const fileUri = getFileUri(arg);
+            await approveAllChangesCommand(historyManager, storageService, fileUri);
+            treeProvider.refresh();
+        }
+    );
+    context.subscriptions.push(approveAllChangesCommandDisposable);
     
     // Команда showDetails
     const showDetailsCommandDisposable = vscode.commands.registerCommand(
@@ -157,6 +190,16 @@ export function activate(context: vscode.ExtensionContext) {
         }
     );
     context.subscriptions.push(clearSnapshotsCommandDisposable);
+
+    // Команда deleteAllSnapshots
+    const deleteAllSnapshotsCommandDisposable = vscode.commands.registerCommand(
+        'changes-viewer.deleteAllSnapshots',
+        async () => {
+            await deleteAllSnapshotsCommand(cleanupService);
+            treeProvider.refresh();
+        }
+    );
+    context.subscriptions.push(deleteAllSnapshotsCommandDisposable);
     
     logger.info('All commands registered');
     logger.info('Changes Viewer extension activated successfully!');

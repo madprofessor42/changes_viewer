@@ -38,14 +38,18 @@ export class LocalHistoryTreeProvider implements vscode.TreeDataProvider<History
 
                 return snapshots.map(snapshot => {
                     const relativeTime = formatRelativeTime(snapshot.timestamp);
-                    const label = `${this.getSourceLabel(snapshot.source)} (${relativeTime})`;
+                    let label = `${this.getSourceLabel(snapshot.source)} (${relativeTime})`;
+                    
+                    if (snapshot.accepted) {
+                        label = `Approved (${relativeTime})`;
+                    }
                     
                     return new HistoryTreeItem(
                         label,
                         snapshot.id,
                         vscode.TreeItemCollapsibleState.None,
                         snapshot,
-                        this.getIconPath(snapshot.source),
+                        this.getIconPath(snapshot), // Передаем snapshot целиком
                         element.fileUri // Передаем fileUri для контекста
                     );
                 });
@@ -93,7 +97,17 @@ export class LocalHistoryTreeProvider implements vscode.TreeDataProvider<History
         }
     }
 
-    private getIconPath(source: string): vscode.ThemeIcon {
+    private getIconPath(sourceOrSnapshot: string | Snapshot): vscode.ThemeIcon {
+        // Если передан snapshot
+        if (typeof sourceOrSnapshot === 'object') {
+            const snapshot = sourceOrSnapshot as Snapshot;
+            if (snapshot.accepted) {
+                return new vscode.ThemeIcon('check');
+            }
+            return this.getIconPath(snapshot.source);
+        }
+
+        const source = sourceOrSnapshot as string;
         switch (source) {
             case 'typing': return new vscode.ThemeIcon('edit');
             case 'save': return new vscode.ThemeIcon('save');
@@ -121,19 +135,25 @@ export class HistoryTreeItem extends vscode.TreeItem {
             this.description = new Date(snapshot.timestamp).toLocaleTimeString();
             this.contextValue = 'changes-viewer.snapshotItem';
             
-            // Действие по клику - показать детали
+            // Действие по клику - показать diff
             this.command = {
-                command: 'changes-viewer.showDetails',
-                title: 'Show Details',
+                command: 'changes-viewer.diff',
+                title: 'Show Diff',
                 arguments: [snapshot.id]
             };
         } else if (fileUri) {
             // Это файл
             const uri = vscode.Uri.parse(fileUri);
-            this.tooltip = `File: ${uri.fsPath}\nClick to view history`;
+            this.tooltip = `File: ${uri.fsPath}\nClick to view changes since last approve`;
             this.description = path.dirname(uri.fsPath); // Показываем директорию
             this.contextValue = 'changes-viewer.fileItem';
-            // Нет команды по клику - просто раскрывает дерево
+            
+            // Действие по клику - показать изменения с момента последнего approve
+            this.command = {
+                command: 'changes-viewer.diffWithLastApproved',
+                title: 'Show Changes Since Last Approve',
+                arguments: [this] // Передаем сам элемент (из него достанем fileUri)
+            };
         } else {
             // Это информационное сообщение
             this.tooltip = label;

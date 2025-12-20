@@ -235,6 +235,43 @@ class CleanupService {
         return deletedCount;
     }
     /**
+     * Полностью удаляет ВСЕ снапшоты.
+     * @returns Количество удаленных снапшотов
+     */
+    async deleteAllSnapshots() {
+        this.logger.info('Starting full cleanup (deleteAllSnapshots)');
+        const allSnapshots = await this.storageService.getAllSnapshots();
+        const count = allSnapshots.length;
+        if (count === 0) {
+            return 0;
+        }
+        // 1. Удаляем файлы контента
+        // Можно оптимизировать удалив всю папку snapshots, но StorageService управляет структурой
+        // Для безопасности будем удалять через API StorageService, но массово.
+        // Или просто переберем, но без сохранения индекса каждый раз.
+        for (const snapshot of allSnapshots) {
+            try {
+                await this.storageService.deleteSnapshotContent(snapshot.contentPath);
+            }
+            catch (error) {
+                this.logger.error(`Failed to delete snapshot content ${snapshot.contentPath}`, error);
+            }
+        }
+        // 2. Очищаем индекс полностью
+        const index = await this.getStorageIndex();
+        index.snapshots = [];
+        index.index = {};
+        index.metadata.totalSnapshots = 0;
+        index.metadata.totalSize = 0;
+        index.metadata.lastCleanup = Date.now();
+        // 3. Сохраняем пустой индекс
+        await this.saveStorageIndex(index);
+        // 4. Очищаем кэш времени доступа
+        this.lastAccessTime.clear();
+        this.logger.info(`Full cleanup completed. Deleted ${count} snapshots.`);
+        return count;
+    }
+    /**
      * Запускает периодическую очистку хранилища.
      * @param intervalHours Интервал очистки в часах (по умолчанию 24 часа)
      */

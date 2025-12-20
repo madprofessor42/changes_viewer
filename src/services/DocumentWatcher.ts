@@ -1,4 +1,5 @@
 import * as vscode from 'vscode';
+import * as fs from 'fs/promises';
 import { LocalHistoryManager } from './LocalHistoryManager';
 import { ConfigurationService } from './ConfigurationService';
 import * as uriUtils from '../utils/uri';
@@ -104,6 +105,9 @@ export class DocumentWatcher {
         // Получаем debounce значение из конфигурации
         const debounceMs = this.configService.getTypingDebounce();
 
+        // Пытаемся создать базовый снапшот сразу при изменении (до срабатывания debounce)
+        this.checkAndCreateBaseline(document);
+
         // Отменяем предыдущий таймер для этого файла, если он существует
         const existingTimer = this.debounceTimers.get(fileUri);
         if (existingTimer) {
@@ -124,6 +128,58 @@ export class DocumentWatcher {
 
         // Сохраняем таймер в Map
         this.debounceTimers.set(fileUri, timer);
+    }
+
+    /**
+     * Проверяет и создает базовый снапшот (исходное состояние), если истории еще нет.
+     * Использует блокировку для предотвращения множественных проверок для одного файла.
+     */
+    private baselineCreationLocks: Set<string> = new Set();
+
+    private async checkAndCreateBaseline(document: vscode.TextDocument): Promise<void> {
+        const fileUri = document.uri.toString();
+        
+        // Если проверка для этого файла уже идет, пропускаем
+        if (this.baselineCreationLocks.has(fileUri)) {
+            return;
+        }
+
+        // Фильтруем только файловую схему
+        if (document.uri.scheme !== 'file') {
+            return;
+        }
+
+        this.baselineCreationLocks.add(fileUri);
+
+        try {
+            // Проверяем наличие истории
+            const snapshots = await this.historyManager.getSnapshotsForFile(document.uri);
+            
+            if (snapshots.length === 0) {
+                // Истории нет, нужно создать базовый снапшот
+                try {
+                    this.logger.debug(`No history found for ${document.uri.fsPath}. Creating baseline snapshot immediately.`);
+                    
+                    // Читаем исходное состояние файла с диска
+                    // Используем fs.readFile для надежности чтения локальных файлов
+                    const originalContent = await fs.readFile(document.uri.fsPath, 'utf8');
+                    
+                    // Создаем базовый снапшот
+                    const baselineSnapshot = await this.historyManager.createSnapshot(
+                        document.uri,
+                        originalContent,
+                        'filesystem' // Помечаем как внешнее/исходное состояние
+                    );
+                    this.logger.info(`Created baseline snapshot for ${document.uri.fsPath} (ID: ${baselineSnapshot.id})`);
+                } catch (readError) {
+                    this.logger.warn(`Failed to create baseline snapshot: ${readError instanceof Error ? readError.message : String(readError)}`);
+                }
+            }
+        } catch (error) {
+            this.logger.error(`Error checking baseline for ${fileUri}`, error);
+        } finally {
+            this.baselineCreationLocks.delete(fileUri);
+        }
     }
 
     /**

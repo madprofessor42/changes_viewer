@@ -142,8 +142,7 @@ async function restoreCommand(historyManager, storageService, snapshotId) {
             return;
         }
         // 7. Записываем содержимое в файл на диск
-        // UC-05 А4: Ошибка записи файла - показываем уведомление с деталями, предлагаем восстановить резервную копию
-        let backupCreated = false;
+        // UC-05 А4: Ошибка записи файла - показываем уведомление с деталями
         try {
             // Явно создаем директорию, если её нет (для случая, когда файл был удален)
             const fileDirUri = vscode.Uri.file(path.dirname(fileUri.fsPath));
@@ -154,34 +153,14 @@ async function restoreCommand(historyManager, storageService, snapshotId) {
                 // Директория не существует, создаем её
                 await vscode.workspace.fs.createDirectory(fileDirUri);
             }
-            // Создаем резервную копию текущего файла перед восстановлением (если файл существует)
-            try {
-                const currentFileData = await vscode.workspace.fs.readFile(fileUri);
-                const backupUri = vscode.Uri.file(fileUri.fsPath + '.backup');
-                await vscode.workspace.fs.writeFile(backupUri, currentFileData);
-                backupCreated = true;
-                logger.debug(`Backup created: ${backupUri.fsPath}`);
-            }
-            catch (backupError) {
-                // Если не удалось создать резервную копию, продолжаем восстановление
-                if (backupError instanceof vscode.FileSystemError && backupError.code === 'FileNotFound') {
-                    // Файл не существует - это нормально, резервная копия не нужна
-                }
-                else {
-                    logger.warn('Failed to create backup before restore', backupError);
-                }
-            }
             // Записываем содержимое через VS Code API
             const contentBuffer = Buffer.from(snapshotContent, 'utf8');
             await vscode.workspace.fs.writeFile(fileUri, contentBuffer);
         }
         catch (error) {
             logger.error(`Failed to write file during restore: ${fileUri.fsPath}`, error);
-            // Формируем сообщение об ошибке с предложением восстановить резервную копию
-            let errorMessage = `Failed to restore file: ${error instanceof Error ? error.message : String(error)}`;
-            if (backupCreated) {
-                errorMessage += '\n\nA backup was created before restore. You can restore it manually.';
-            }
+            // Формируем сообщение об ошибке
+            const errorMessage = `Failed to restore file: ${error instanceof Error ? error.message : String(error)}`;
             vscode.window.showErrorMessage(errorMessage);
             return;
         }
