@@ -47,8 +47,30 @@ const validation_1 = require("../utils/validation");
  * @param storageService Сервис хранилища для чтения содержимого снапшотов
  * @param snapshotId ID снапшота для сравнения
  */
-async function diffCommand(historyManager, storageService, snapshotId) {
+async function diffCommand(historyManager, storageService, snapshotId, fileUri) {
     const logger = logger_1.Logger.getInstance();
+    // Если snapshotId не передан, но передан fileUri, пытаемся найти подходящий снапшот
+    if (!snapshotId && fileUri) {
+        try {
+            const snapshots = await historyManager.getSnapshotsForFile(fileUri);
+            // Пытаемся найти последний принятый (approved) снапшот
+            const approvedSnapshot = snapshots.find(s => s.accepted);
+            if (approvedSnapshot) {
+                snapshotId = approvedSnapshot.id;
+            }
+            else if (snapshots.length > 0) {
+                // Если принятых нет, берем самый старый (базовый)
+                snapshotId = snapshots[snapshots.length - 1].id;
+            }
+            else {
+                vscode.window.showInformationMessage('No history found for this file.');
+                return;
+            }
+        }
+        catch (error) {
+            logger.error('Error finding snapshot for diff', error);
+        }
+    }
     // Проверяем наличие snapshotId
     if (!snapshotId) {
         logger.warn('Diff command called without snapshotId');

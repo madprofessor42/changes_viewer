@@ -41,6 +41,7 @@ const StorageService_1 = require("./services/StorageService");
 const CleanupService_1 = require("./services/CleanupService");
 const LocalHistoryManager_1 = require("./services/LocalHistoryManager");
 const ChangeTracker_1 = require("./services/ChangeTracker");
+const InlineDiffService_1 = require("./services/InlineDiffService");
 // import { LocalHistoryTimelineProvider } from './providers/LocalHistoryTimelineProvider'; // Убрали Timeline
 const LocalHistoryTreeProvider_1 = require("./providers/LocalHistoryTreeProvider");
 const restoreCommand_1 = require("./commands/restoreCommand");
@@ -56,6 +57,7 @@ const deleteFileSnapshotsCommand_1 = require("./commands/deleteFileSnapshotsComm
 const openFileCommand_1 = require("./commands/openFileCommand");
 const discardAllChangesCommand_1 = require("./commands/discardAllChangesCommand");
 const toggleUnapprovedFilterCommand_1 = require("./commands/toggleUnapprovedFilterCommand");
+const toggleInlineDiffCommand_1 = require("./commands/toggleInlineDiffCommand");
 const logger_1 = require("./utils/logger");
 /**
  * Активирует расширение Changes Viewer.
@@ -93,6 +95,36 @@ function activate(context) {
     logger.debug('ChangeTracker: initializing');
     const changeTracker = new ChangeTracker_1.ChangeTracker(historyManager, configService);
     logger.info('ChangeTracker: initialized');
+    // 6. InlineDiffService
+    logger.debug('InlineDiffService: initializing');
+    const inlineDiffService = new InlineDiffService_1.InlineDiffService(storageService, historyManager);
+    context.subscriptions.push(vscode.languages.registerCodeLensProvider({ scheme: 'changes-viewer' }, inlineDiffService));
+    context.subscriptions.push(vscode.workspace.registerTextDocumentContentProvider('changes-viewer', inlineDiffService));
+    // Listen for document close to clear inline diff sessions
+    context.subscriptions.push(vscode.workspace.onDidCloseTextDocument(doc => {
+        inlineDiffService.onDocumentClosed(doc.uri);
+    }));
+    // Listen for document open to apply decorations
+    context.subscriptions.push(vscode.workspace.onDidOpenTextDocument(async (doc) => {
+        if (doc.uri.scheme === 'changes-viewer') {
+            await inlineDiffService.onDocumentOpened(doc);
+        }
+    }));
+    // Listen for document change to re-apply decorations (needed when provider updates content)
+    context.subscriptions.push(vscode.workspace.onDidChangeTextDocument(async (event) => {
+        if (event.document.uri.scheme === 'changes-viewer') {
+            await inlineDiffService.onDocumentOpened(event.document);
+        }
+    }));
+    // Listen for visible editors change to apply decorations (needed when switching tabs)
+    context.subscriptions.push(vscode.window.onDidChangeVisibleTextEditors(editors => {
+        editors.forEach(editor => {
+            if (editor.document.uri.scheme === 'changes-viewer') {
+                inlineDiffService.onDocumentOpened(editor.document);
+            }
+        });
+    }));
+    logger.info('InlineDiffService: initialized');
     // Запускаем отслеживание изменений
     changeTracker.startTracking();
     logger.info('Change tracking started');
@@ -156,11 +188,61 @@ function activate(context) {
     });
     context.subscriptions.push(acceptCommandDisposable);
     // Команда diff
-    const diffCommandDisposable = vscode.commands.registerCommand('changes-viewer.diff', async (arg) => {
+    const diffCommandDisposable = vscode.commands.registerCommand('changes-viewer.diff', async (arg, arg2) => {
         const snapshotId = getSnapshotId(arg);
-        await (0, diffCommand_1.diffCommand)(historyManager, storageService, snapshotId);
+        let fileUri = getFileUri(arg);
+        // Если fileUri не получен из первого аргумента, проверяем второй
+        if (!fileUri && arg2 instanceof vscode.Uri) {
+            fileUri = arg2;
+        }
+        else if (!fileUri && typeof arg2 === 'string') {
+            fileUri = vscode.Uri.parse(arg2);
+        }
+        await (0, diffCommand_1.diffCommand)(historyManager, storageService, snapshotId, fileUri);
     });
     context.subscriptions.push(diffCommandDisposable);
+    // Команда toggleInlineDiff
+    // Аргументы: [snapshotId?, fileUriString?, isSnapshotClick?]
+    // - При клике на snapshot: snapshotId, fileUri, isSnapshotClick=true → показать диф между этим снапшотом и предыдущим
+    // - При клике на файл: undefined, fileUri, isSnapshotClick=false → показать диф между текущим файлом и approved/base
+    const toggleInlineDiffCommandDisposable = vscode.commands.registerCommand('changes-viewer.toggleInlineDiff', async (arg1, arg2, arg3) => {
+        let snapshotId = undefined;
+        let fileUriString = undefined;
+        let isSnapshotClick = false;
+        if (typeof arg1 === 'string') {
+            snapshotId = arg1;
+        }
+        else if (arg1 instanceof LocalHistoryTreeProvider_1.HistoryTreeItem) {
+            // If called from context menu on snapshot item
+            snapshotId = arg1.snapshotId;
+            // If called from context menu on file item
+            if (!snapshotId && arg1.fileUri) {
+                fileUriString = arg1.fileUri;
+            }
+        }
+        // Check arg2 for fileUri as string or Uri
+        if (arg2) {
+            if (arg2 instanceof vscode.Uri) {
+                fileUriString = arg2.toString();
+            }
+            else if (typeof arg2 === 'string') {
+                fileUriString = arg2;
+            }
+        }
+        // arg3 determines the comparison mode
+        if (arg3 === true) {
+            isSnapshotClick = true;
+        }
+        await (0, toggleInlineDiffCommand_1.toggleInlineDiffCommand)(inlineDiffService, snapshotId, fileUriString, historyManager, isSnapshotClick);
+    });
+    context.subscriptions.push(toggleInlineDiffCommandDisposable);
+    // Команды для CodeLens (approve/undo)
+    context.subscriptions.push(vscode.commands.registerCommand('changes-viewer.inline.approve', async (uri, snapshotId, change, type) => {
+        await inlineDiffService.applyApprove(uri, snapshotId, change, type);
+    }));
+    context.subscriptions.push(vscode.commands.registerCommand('changes-viewer.inline.undo', async (uri, snapshotId, change, type) => {
+        await inlineDiffService.applyUndo(uri, snapshotId, change, type);
+    }));
     // Команда diffWithLastApproved
     const diffWithLastApprovedCommandDisposable = vscode.commands.registerCommand('changes-viewer.diffWithLastApproved', async (arg) => {
         const fileUri = getFileUri(arg);

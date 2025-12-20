@@ -201,11 +201,12 @@ export class HistoryTreeItem extends vscode.TreeItem {
             this.description = new Date(snapshot.timestamp).toLocaleTimeString();
             this.contextValue = 'changes-viewer.snapshotItem';
             
-            // Действие по клику - показать diff
+            // Действие по клику - показать inline diff между этим снапшотом и предыдущим
+            // Аргументы: [snapshotId, fileUriString, isSnapshotClick]
             this.command = {
-                command: 'changes-viewer.diff',
-                title: 'Show Diff',
-                arguments: [snapshot.id]
+                command: 'changes-viewer.toggleInlineDiff',
+                title: 'Show Diff with Previous Snapshot',
+                arguments: [snapshot.id, snapshot.fileUri, true] // isSnapshotClick = true
             };
         } else if (fileUri) {
             // Это файл
@@ -215,10 +216,11 @@ export class HistoryTreeItem extends vscode.TreeItem {
             this.contextValue = 'changes-viewer.fileItem';
             
             // Действие по клику - показать изменения с момента последнего approve
+            // Аргументы: [snapshotId, fileUriString, isSnapshotClick]
             this.command = {
-                command: 'changes-viewer.diffWithLastApproved',
+                command: 'changes-viewer.toggleInlineDiff',
                 title: 'Show Changes Since Last Approve',
-                arguments: [this] // Передаем сам элемент (из него достанем fileUri)
+                arguments: [undefined, this.fileUri, false] // isSnapshotClick = false - сравнение текущего файла с approved/base
             };
         } else {
             // Это информационное сообщение

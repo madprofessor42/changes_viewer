@@ -365,6 +365,45 @@ export class LocalHistoryManager {
     }
 
     /**
+     * Обновляет содержимое снапшота.
+     * Используется для "Approve" (частичного обновления) снапшота.
+     * 
+     * @param snapshotId ID снапшота
+     * @param content Новое содержимое
+     * @throws Error если снапшот не найден или ошибка записи
+     */
+    async updateSnapshotContent(snapshotId: string, content: string): Promise<void> {
+        const snapshot = await this.getSnapshot(snapshotId);
+        if (!snapshot) {
+            throw new Error(`Snapshot not found: ${snapshotId}`);
+        }
+
+        // Вычисляем новый hash (может понадобиться для дедупликации в будущем, но здесь мы меняем существующий)
+        const contentHash = await computeHash(content);
+        const size = Buffer.byteLength(content, 'utf8');
+        const lineCount = content.split(/\r?\n/).length;
+
+        // Перезаписываем контент
+        // saveSnapshotContent использует ID для имени файла, так что он перезапишет существующий
+        // Но нам нужно передать fileHash для директории. У снапшота нет fileHash в явном виде в метаданных?
+        // StorageService saveSnapshotContent принимает fileHash. 
+        // Мы можем вычислить fileHash из fileUri.
+        const fileHash = await computeHash(snapshot.fileUri);
+
+        await this.storageService.saveSnapshotContent(snapshotId, content, fileHash);
+
+        // Обновляем метаданные
+        await this.updateSnapshot(snapshotId, {
+            contentHash,
+            metadata: {
+                ...snapshot.metadata,
+                size,
+                lineCount
+            }
+        });
+    }
+
+    /**
      * Удаляет снапшот по ID.
      * 
      * @param snapshotId ID снапшота

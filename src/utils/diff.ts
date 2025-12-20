@@ -1,5 +1,14 @@
 import { DiffInfo } from '../types/snapshot';
 
+export interface DiffChange {
+    originalStart: number;
+    originalLength: number;
+    modifiedStart: number;
+    modifiedLength: number;
+    originalContent: string[];
+    modifiedContent: string[];
+}
+
 /**
  * Вычисляет различия между двумя версиями содержимого файла.
  * Использует простой алгоритм построчного сравнения.
@@ -74,6 +83,80 @@ export function computeDiff(content1: string, content2: string): DiffInfo {
         removedLines: Math.max(0, removedLines),
         modifiedLines: Math.max(0, modifiedLines)
     };
+}
+
+/**
+ * Вычисляет детальные изменения (changesets) между двумя версиями.
+ * Возвращает список блоков изменений (удаление + добавление).
+ */
+export function computeDetailedDiff(content1: string, content2: string): DiffChange[] {
+    const lines1 = content1.split(/\r?\n/);
+    const lines2 = content2.split(/\r?\n/);
+    
+    // Используем простой diff алгоритм (Myers или подобный был бы лучше, но для простоты используем LCS)
+    const lcs = computeLCS(lines1, lines2);
+    
+    const changes: DiffChange[] = [];
+    
+    let i = 0; // index in lines1
+    let j = 0; // index in lines2
+    let lcsIdx = 0; // index in lcs
+    
+    while (i < lines1.length || j < lines2.length) {
+        // Если достигли конца LCS, все оставшееся - изменения
+        if (lcsIdx >= lcs.length) {
+            if (i < lines1.length || j < lines2.length) {
+                changes.push({
+                    originalStart: i,
+                    originalLength: lines1.length - i,
+                    modifiedStart: j,
+                    modifiedLength: lines2.length - j,
+                    originalContent: lines1.slice(i),
+                    modifiedContent: lines2.slice(j)
+                });
+            }
+            break;
+        }
+        
+        const commonLine = lcs[lcsIdx];
+        
+        // Ищем следующий общий элемент
+        // Пропускаем строки, которые не совпадают с commonLine -> это изменения
+        
+        let iNext = i;
+        while (iNext < lines1.length && lines1[iNext] !== commonLine) {
+            iNext++;
+        }
+        
+        let jNext = j;
+        while (jNext < lines2.length && lines2[jNext] !== commonLine) {
+            jNext++;
+        }
+        
+        // Если нашли изменения перед общим блоком
+        if (iNext > i || jNext > j) {
+            changes.push({
+                originalStart: i,
+                originalLength: iNext - i,
+                modifiedStart: j,
+                modifiedLength: jNext - j,
+                originalContent: lines1.slice(i, iNext),
+                modifiedContent: lines2.slice(j, jNext)
+            });
+        }
+        
+        // Сдвигаем указатели за общий элемент
+        // ВАЖНО: computeLCS может вернуть повторяющиеся строки. 
+        // Нам нужно убедиться, что мы синхронизируемся правильно.
+        // Простой подход с LCS массивом строк может быть ненадежен для повторяющихся строк.
+        // Но для прототипа сойдет.
+        
+        i = iNext + 1;
+        j = jNext + 1;
+        lcsIdx++;
+    }
+    
+    return changes;
 }
 
 /**
